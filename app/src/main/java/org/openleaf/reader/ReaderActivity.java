@@ -55,6 +55,7 @@ import org.openleaf.reader.core.FontLibrary.Entry;
 import org.openleaf.reader.core.FontResolver;
 import org.openleaf.reader.core.FontResolver.Kind;
 import org.openleaf.reader.core.FontResolver.Result;
+import org.openleaf.reader.core.ParagraphReflow;
 import org.openleaf.reader.core.ReaderPresets;
 import org.openleaf.reader.core.ThemePalette;
 import org.openleaf.reader.core.TocFilter;
@@ -77,6 +78,14 @@ public final class ReaderActivity extends Activity {
             "暖白", "米黄", "护眼绿", "浅灰", "淡蓝", "夜间", "深灰", "纯黑"};
     private static final String[] INK_NAMES = {
             "墨黑", "深棕", "深蓝", "深绿", "灰", "浅灰", "米白", "纯白"};
+    // 0.57.0 P1-2：排版草稿面板的静态文案与小样文本（中英混排 + 标点 + 3 行）。
+    private static final String[] PRESET_NAMES = {"紧凑", "标准", "宽松", "小说", "漫画"};
+    private static final String[] ALIGN_LABELS = {"左对齐", "两端对齐", "居中", "右对齐"};
+    private static final String[] CONVERT_LABELS = {"原文", "简→繁", "繁→简"};
+    private static final String STYLE_SAMPLE_TEXT =
+            "墨香伴长夜，开卷见青山。读书写字，字字入心。OpenLeaf 0123456789 abcXYZ。\n"
+            + "标点齐备：逗号，句号。叹号！问号？冒号：引号「你好」；English words 42。\n"
+            + "小样只反映草稿，点「应用」才会写入配置并重排正文。Lorem ipsum 2026。";
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private SharedPreferences prefs;
     private LazyChapterBook book;
@@ -91,6 +100,18 @@ public final class ReaderActivity extends Activity {
     private LinearLayout fontCardsContainer;
     private List<Entry> fontDialogEntries = new ArrayList<>();
     private int fontPreviewGeneration;
+    // 0.57.0 P1-2：排版草稿与面板视图引用，生命周期与排版 dialog 完全绑定。
+    private StyleDraft styleDraft;
+    private StylePanelViews stylePanelViews;
+    /** 排版面板内可变的视图引用；只用于刷新文案与小样，dismiss 时整组清空。 */
+    private static final class StylePanelViews {
+        TextView preview;
+        TextView presetTitle;
+        Button[] presets;
+        TextView sizeValue;
+        Button reflow;
+        Button[] options;
+    }
     private ReadingStatsStore statsStore;
     private BookStore.Book currentRecord;
     // 在线书逐章缓存：从骨架 txt 打开，正文按需下载到 chapter_cache
@@ -1976,52 +1997,88 @@ public final class ReaderActivity extends Activity {
         return fallback;
     }
 
-    /** 排版设置面板：预设横排 + 7 项微调 + 段落重排开关 + 正文字体（0.27.0 面板的增量扩展）。 */
+    /**
+     * 0.57.0 P1-2 排版设置面板：所有改动先进 StyleDraft，只刷静态小样；
+     * 仅点「应用」才一次性写 prefs 并重排一次，取消/返回/点外侧零写入。
+     */
     private void openStyleSettings() {
         if (book == null || text == null) return;
-        String[] presetNames = {"紧凑", "标准", "宽松", "小说", "漫画"};
-        int[] presetIds = {ReaderPresets.COMPACT, ReaderPresets.STANDARD, ReaderPresets.LOOSE,
-                ReaderPresets.NOVEL, ReaderPresets.COMIC};
-        int[] current7 = {style.lineSpacing, style.paraSpacing, style.letterSpacing,
-                style.sideMargin, style.align, style.indent, style.convert};
-        final int selectedPreset = ReaderPresets.detectPreset(current7);
+        styleDraft = StyleDraft.from(style, paragraphReflowEnabled(), fontSize);
         final AlertDialog[] dialogHolder = new AlertDialog[1];
 
+        StylePanelViews views = new StylePanelViews();
+        stylePanelViews = views;
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 14);
-        panel.addView(Ui.text(this, "预设（套用后仍可逐项微调）", 13, Ui.MUTED));
+
+        views.presetTitle = Ui.text(this, "", 13, Ui.MUTED);
+        views.presetTitle.setContentDescription("当前预设");
+        panel.addView(views.presetTitle);
+        Ui.gap(panel, 4);
         LinearLayout presetRow = Ui.row(this);
-        for (int i = 0; i < presetIds.length; i++) {
-            final int presetId = presetIds[i];
-            Button presetButton = Ui.button(this,
-                    (selectedPreset == presetId ? "● " : "○ ") + presetNames[i], () -> {
-                        save();
-                        int anchor = pendingOffset;
-                        boolean bottom = pendingBottom;
-                        float fraction = pendingLineFraction;
-                        style.applyPreset(presetId);
-                        prefs.edit().putInt("style_preset", presetId).apply();
-                        dialogHolder[0].dismiss();
-                        afterStyleChange(anchor, bottom, fraction);
-                    }, "预设-" + presetNames[i]);
-            presetRow.addView(presetButton, Ui.weight());
+        views.presets = new Button[PRESET_NAMES.length];
+        for (int i = 0; i < PRESET_NAMES.length; i++) {
+            final int presetId = ReaderPresets.COMPACT + i; // 与 PRESET_NAMES 顺序一致
+            views.presets[i] = Ui.button(this, PRESET_NAMES[i], () -> {
+                if (styleDraft == null) return;
+                styleDraft.applyPreset(presetId);
+                refreshStylePreview();
+            }, "预设-" + PRESET_NAMES[i]);
+            presetRow.addView(views.presets[i], Ui.weight());
         }
         panel.addView(presetRow);
         Ui.gap(panel, 8);
-        Button reflowButton = Ui.button(this,
-                "段落重排：" + (paragraphReflowEnabled() ? "开（点击关闭）" : "关（点击开启）"), () -> {
-                    save();
-                    int anchor = pendingOffset;
-                    boolean bottom = pendingBottom;
-                    float fraction = pendingLineFraction;
-                    prefs.edit().putBoolean("paragraph_reflow", !paragraphReflowEnabled()).apply();
-                    dialogHolder[0].dismiss();
-                    afterStyleChange(anchor, bottom, fraction);
-                }, "段落重排开关");
-        panel.addView(reflowButton, new LinearLayout.LayoutParams(-1, -2));
+
+        // 字号纳入草稿：−/＋ 各 ±2，clamp 与 settings() 的既有入口一致（14–32）。
+        LinearLayout sizeRow = Ui.row(this);
+        sizeRow.addView(Ui.button(this, "字号 −", () -> {
+            if (styleDraft == null) return;
+            styleDraft.setFontSize(Math.max(StyleDraft.MIN_FONT_SIZE, styleDraft.fontSize() - 2));
+            refreshStylePreview();
+        }, "字号减小"));
+        views.sizeValue = Ui.text(this, "", 16, Ui.INK);
+        views.sizeValue.setGravity(android.view.Gravity.CENTER);
+        views.sizeValue.setContentDescription("当前字号");
+        sizeRow.addView(views.sizeValue, Ui.weight());
+        sizeRow.addView(Ui.button(this, "字号 ＋", () -> {
+            if (styleDraft == null) return;
+            styleDraft.setFontSize(Math.min(StyleDraft.MAX_FONT_SIZE, styleDraft.fontSize() + 2));
+            refreshStylePreview();
+        }, "字号增大"));
+        panel.addView(sizeRow);
         Ui.gap(panel, 8);
-        // 0.30.0 #2：自定义背景色 / 字色，只作用于阅读页正文区。
-        // 先关父面板再开色板，避免应用后重开面板时叠出两个排版对话框。
+
+        // 静态小样：面板构造时创建一次，后续只改属性，绝不重载真实章节。
+        views.preview = Ui.text(this, STYLE_SAMPLE_TEXT, styleDraft.fontSize(), Ui.INK);
+        views.preview.setContentDescription("排版小样预览");
+        LinearLayout previewBox = Ui.column(this);
+        Ui.pad(previewBox, 10);
+        previewBox.setBackground(Ui.outline(this, Ui.LINE, 8));
+        previewBox.addView(views.preview, new LinearLayout.LayoutParams(-1, -2));
+        panel.addView(previewBox, new LinearLayout.LayoutParams(-1, -2));
+        Ui.gap(panel, 8);
+
+        views.reflow = Ui.button(this, "", () -> {
+            if (styleDraft == null) return;
+            styleDraft.setParagraphReflow(!styleDraft.paragraphReflow());
+            refreshStylePreview();
+        }, "段落重排开关");
+        panel.addView(views.reflow, new LinearLayout.LayoutParams(-1, -2));
+        Ui.gap(panel, 8);
+
+        // 字体/颜色是独立即时入口，不进草稿；面板内只静态展示当前生效字体与范围。
+        panel.addView(Ui.text(this, "当前生效字体：" + effectiveFontDescription(), 13, Ui.MUTED));
+        panel.addView(Ui.text(this, "设置范围：" + ReaderFonts.describeMode(fonts.mode()), 13, Ui.MUTED));
+        if (fonts.mode() == ReaderFonts.MODE_SYSTEM) {
+            panel.addView(Ui.text(this, "跟随系统时本书字体覆盖不生效", 12, Ui.MUTED));
+        }
+        Ui.gap(panel, 4);
+        // 保留旧自动化钩子「排版项-8」；语义仍是跳独立字体对话框。
+        panel.addView(Ui.button(this, "正文字体 ›", () -> {
+            dialogHolder[0].dismiss();
+            openFontSettings();
+        }, "排版项-8"), new LinearLayout.LayoutParams(-1, -2));
+        Ui.gap(panel, 4);
         panel.addView(Ui.button(this, "背景色：" + colorLabel(true), () -> {
             dialogHolder[0].dismiss();
             openColorPicker(true);
@@ -2032,54 +2089,182 @@ public final class ReaderActivity extends Activity {
             openColorPicker(false);
         }, "字色"), new LinearLayout.LayoutParams(-1, -2));
         Ui.gap(panel, 8);
-        panel.addView(Ui.text(this, "逐项微调", 13, Ui.MUTED));
 
-        String[] options = {
-                "行距：" + fmt2(style.lineSpacingMultiplier()) + " 倍",
-                "段距：" + style.paraSpacingSp() + " sp",
-                "字距：" + String.format(Locale.ROOT, "%.2f", style.letterSpacingEm()) + " em",
-                "页边距：" + style.sideMarginDp() + " dp",
-                "对齐：" + new String[]{"左对齐", "两端对齐", "居中", "右对齐"}[style.align],
-                "首行缩进：" + style.indentChars() + " 字",
-                "简繁：" + new String[]{"原文", "简→繁", "繁→简"}[style.convert],
-                "重置为默认",
-                "正文字体：" + fontModeLabel()
-        };
-        for (int i = 0; i < options.length; i++) {
+        panel.addView(Ui.text(this, "逐项微调（仅刷小样，点应用才生效）", 13, Ui.MUTED));
+        views.options = new Button[8];
+        for (int i = 0; i < views.options.length; i++) {
             final int which = i;
-            Button option = Ui.button(this, options[i], () -> {
-                save();
-                int anchor = pendingOffset;
-                boolean bottom = pendingBottom;
-                float fraction = pendingLineFraction;
+            views.options[i] = Ui.button(this, "", () -> {
+                if (styleDraft == null) return;
                 switch (which) {
-                    case 0: style.lineSpacing = (style.lineSpacing + 1) % ReaderStyle.LINE_SPACING.length; break;
-                    case 1: style.paraSpacing = (style.paraSpacing + 1) % ReaderStyle.PARA_SPACING.length; break;
-                    case 2: style.letterSpacing = (style.letterSpacing + 1) % ReaderStyle.LETTER_SPACING.length; break;
-                    case 3: style.sideMargin = (style.sideMargin + 1) % ReaderStyle.SIDE_MARGIN.length; break;
-                    case 4: style.align = (style.align + 1) % 4; break;
-                    case 5: style.indent = (style.indent + 1) % ReaderStyle.INDENT.length; break;
-                    case 6: style.convert = (style.convert + 1) % 3; break;
-                    case 7:
-                        // 重置为默认 = 套用"标准"预设（= 0.27.0 默认值）
-                        style.applyPreset(ReaderPresets.STANDARD);
-                        break;
-                    case 8: dialogHolder[0].dismiss(); openFontSettings(); return;
+                    case 0: styleDraft.setLineSpacing((styleDraft.lineSpacing() + 1) % ReaderStyle.LINE_SPACING.length); break;
+                    case 1: styleDraft.setParaSpacing((styleDraft.paraSpacing() + 1) % ReaderStyle.PARA_SPACING.length); break;
+                    case 2: styleDraft.setLetterSpacing((styleDraft.letterSpacing() + 1) % ReaderStyle.LETTER_SPACING.length); break;
+                    case 3: styleDraft.setSideMargin((styleDraft.sideMargin() + 1) % ReaderStyle.SIDE_MARGIN.length); break;
+                    case 4: styleDraft.setAlign((styleDraft.align() + 1) % 4); break;
+                    case 5: styleDraft.setIndent((styleDraft.indent() + 1) % ReaderStyle.INDENT.length); break;
+                    case 6: styleDraft.setConvert((styleDraft.convert() + 1) % 3); break;
+                    case 7: styleDraft.applyPreset(ReaderPresets.STANDARD); break; // 重置为默认
                     default: return;
                 }
-                // 任一项微调后预设态切到自定义；数值照常生效
-                style.stylePreset = which == 7 ? ReaderPresets.STANDARD : ReaderPresets.CUSTOM;
-                dialogHolder[0].dismiss();
-                afterStyleChange(anchor, bottom, fraction);
+                if (which != 7) styleDraft.markCustom();
+                refreshStylePreview();
             }, "排版项-" + i);
-            panel.addView(option, new LinearLayout.LayoutParams(-1, -2));
+            panel.addView(views.options[i], new LinearLayout.LayoutParams(-1, -2));
+            Ui.gap(panel, 2);
         }
+
+        Ui.gap(panel, 10);
+        LinearLayout actions = Ui.row(this);
+        actions.addView(Ui.button(this, "取消", () -> dialogHolder[0].dismiss(), "取消排版"), Ui.weight());
+        actions.addView(Ui.button(this, "应用", () -> applyStyleDraft(dialogHolder[0]), "应用排版"), Ui.weight());
+        panel.addView(actions);
 
         ScrollView panelScroll = new ScrollView(this);
         panelScroll.addView(panel);
         dialogHolder[0] = new AlertDialog.Builder(this).setTitle("排版设置")
-                .setView(panelScroll).setNegativeButton("关闭", null).create();
+                .setView(panelScroll)
+                .setNegativeButton("关闭", null)
+                .setOnCancelListener(dialog -> clearStyleDraft())
+                .setOnDismissListener(dialog -> clearStyleDraft())
+                .create();
+        refreshStylePreview();
         dialogHolder[0].show();
+    }
+
+    /** 应用：捕获锚点 → 草稿写回 → 一次落盘 → 一次重排 → dismiss；不做第二遍重排。 */
+    private void applyStyleDraft(AlertDialog dialog) {
+        StyleDraft draft = styleDraft;
+        if (draft == null || dialog == null) return;
+        save();
+        int anchor = pendingOffset;
+        boolean bottom = pendingBottom;
+        float fraction = pendingLineFraction;
+        boolean fontSizeChanged = draft.fontSize() != fontSize;
+        boolean reflowChanged = draft.paragraphReflow() != paragraphReflowEnabled();
+
+        draft.copyInto(style);
+        style.save(); // 一次写全 8 个 style_* 键
+        if (fontSizeChanged || reflowChanged) {
+            SharedPreferences.Editor editor = prefs.edit();
+            if (fontSizeChanged) editor.putInt("fontSize", draft.fontSize());
+            if (reflowChanged) editor.putBoolean("paragraph_reflow", draft.paragraphReflow());
+            editor.apply();
+        }
+
+        // 字号不在 afterStyleChange() 的职责内，这里同步内存值与正文 TextView 尺寸。
+        if (fontSizeChanged) {
+            fontSize = draft.fontSize();
+            if (text != null) text.setTextSize(fontSize);
+        }
+        afterStyleChange(anchor, bottom, fraction);
+        dialog.dismiss(); // OnDismiss 清 draft
+    }
+
+    /** 取消/返回/点外侧：只清引用，零 prefs 写入、零正文重排。 */
+    private void clearStyleDraft() {
+        styleDraft = null;
+        stylePanelViews = null;
+    }
+
+    /** 按 FontResolver 的解析结果描述正文当前真正生效的字体（纯展示，不写 prefs）。 */
+    private String effectiveFontDescription() {
+        Result resolved = FontResolver.resolveEffective(fonts.mode(), fonts.globalFontId(),
+                fonts.bookFontId(id), fonts.library(), fonts.legacyAvailable());
+        if (resolved.kind == Kind.SYSTEM) return "跟随系统（系统默认字形）";
+        if (resolved.kind == Kind.BUILTIN) return "内置默认（系统字体）";
+        if (FontLibrary.LEGACY_ID.equals(resolved.fontId)) return "旧版自定义字体";
+        for (Entry entry : fonts.library()) {
+            if (entry.id.equals(resolved.fontId)) return entry.name;
+        }
+        return resolved.fontId == null || resolved.fontId.isEmpty() ? "系统默认" : resolved.fontId;
+    }
+
+    private static String presetNameFor(int preset) {
+        return preset >= ReaderPresets.COMPACT && preset <= ReaderPresets.COMIC
+                ? PRESET_NAMES[preset - ReaderPresets.COMPACT] : "自定义";
+    }
+
+    /**
+     * 只把草稿画到独立小样与按钮文案上；档位换算直接取 ReaderStyle 的档位数组，
+     * 不读 style 对象（避免误用已持久化值）。全程不碰成员 text / 章节 / 高亮。
+     */
+    private void refreshStylePreview() {
+        StyleDraft draft = styleDraft;
+        StylePanelViews views = stylePanelViews;
+        if (draft == null || views == null || views.preview == null) return;
+
+        // 标题/高亮按 7 项实际数值判定，沿用 0.56.0 的 detectPreset 口径；
+        // draft.preset 仍保留持久化语义，由 copyInto 写回 style_preset。
+        int preset = draft.detectedPreset();
+        if (views.presetTitle != null) {
+            views.presetTitle.setText("当前：" + presetNameFor(preset));
+        }
+        if (views.presets != null) {
+            for (int i = 0; i < views.presets.length; i++) {
+                int current = ReaderPresets.COMPACT + i;
+                views.presets[i].setText((preset == current ? "● " : "○ ") + presetNameFor(current));
+            }
+        }
+        if (views.sizeValue != null) views.sizeValue.setText(String.valueOf(draft.fontSize()));
+        if (views.reflow != null) {
+            views.reflow.setText("段落重排：" + (draft.paragraphReflow() ? "开（点击关闭）" : "关（点击开启）"));
+        }
+        if (views.options != null && views.options.length >= 8) {
+            views.options[0].setText("行距：" + fmt2(ReaderStyle.LINE_SPACING[draft.lineSpacing()]) + " 倍");
+            views.options[1].setText("段距：" + ReaderStyle.PARA_SPACING[draft.paraSpacing()] + " sp");
+            views.options[2].setText("字距：" + String.format(Locale.ROOT, "%.2f",
+                    ReaderStyle.LETTER_SPACING[draft.letterSpacing()]) + " em");
+            views.options[3].setText("页边距：" + ReaderStyle.SIDE_MARGIN[draft.sideMargin()] + " dp");
+            views.options[4].setText("对齐：" + ALIGN_LABELS[draft.align()]);
+            views.options[5].setText("首行缩进：" + ReaderStyle.INDENT[draft.indent()] + " 字");
+            views.options[6].setText("简繁：" + CONVERT_LABELS[draft.convert()]);
+            views.options[7].setText("重置为默认");
+        }
+
+        TextView preview = views.preview;
+        preview.setTextSize(draft.fontSize());
+        preview.setLineSpacing(Ui.dp(this, ReaderStyle.PARA_SPACING[draft.paraSpacing()]),
+                ReaderStyle.LINE_SPACING[draft.lineSpacing()]);
+        preview.setLetterSpacing(ReaderStyle.LETTER_SPACING[draft.letterSpacing()]);
+        switch (draft.align()) {
+            case ReaderStyle.ALIGN_CENTER: preview.setGravity(android.view.Gravity.CENTER_HORIZONTAL); break;
+            case ReaderStyle.ALIGN_RIGHT: preview.setGravity(android.view.Gravity.RIGHT); break;
+            case ReaderStyle.ALIGN_JUSTIFY: preview.setGravity(android.view.Gravity.FILL_HORIZONTAL); break;
+            default: preview.setGravity(android.view.Gravity.LEFT); break;
+        }
+        int side = Ui.dp(this, Math.max(12, ReaderStyle.SIDE_MARGIN[draft.sideMargin()]));
+        preview.setPadding(side, Ui.dp(this, 4), side, Ui.dp(this, 4));
+
+        String sample = STYLE_SAMPLE_TEXT;
+        if (draft.paragraphReflow()) {
+            sample = ParagraphReflow.reflow(sample, true, true, true).displayText;
+        }
+        sample = ChineseConverter.convert(sample, draft.convert());
+        int indentPx = ReaderStyle.INDENT[draft.indent()] * draft.fontSize();
+        if (indentPx <= 0) {
+            preview.setText(sample);
+            return;
+        }
+        // 首行缩进只在小样的段落首字叠加，不回写任何原文或标注。
+        SpannableString marked = new SpannableString(sample);
+        boolean[] decisions = draft.paragraphReflow() ? ParagraphReflow.indentDecisions(sample) : null;
+        int paragraphStart = 0;
+        int line = 0;
+        for (int i = 0; i <= sample.length(); i++) {
+            if (i == sample.length() || sample.charAt(i) == '\n') {
+                if (i > paragraphStart && sample.charAt(paragraphStart) != '\n') {
+                    boolean already = decisions != null && line < decisions.length && decisions[line];
+                    if (!already) {
+                        marked.setSpan(new LeadingMarginSpan.Standard(indentPx), paragraphStart,
+                                paragraphStart + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    }
+                }
+                paragraphStart = i + 1;
+                line++;
+            }
+        }
+        preview.setText(marked);
     }
 
     /** 排版项/预设/重排开关套用后的原位恢复：与 afterFontChange() 同一范式。 */
