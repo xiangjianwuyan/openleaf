@@ -19,6 +19,7 @@ import android.os.SystemClock;
 import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -44,6 +45,12 @@ import java.util.Locale;
  * 「跳变不计时 + 余数结转」口径折算为页数计入阅读统计。
  */
 public final class AudioPlayerActivity extends Activity {
+    /** debug-only 播放状态日志 tag；所有日志由 debugLog 守卫。 */
+    private static final String TAG = "OL-PlaybackState";
+    /** debuggable 包才输出日志；onCreate 开头由 ApplicationInfo.FLAG_DEBUGGABLE 计算一次。 */
+    private boolean debugLog;
+    /** 仅用于 debug 日志的播放器实例序号：创建时递增，释放时读取同一值。 */
+    private int debugInstanceSeq;
     /** 队列顺序枚举。 */
     private enum Repeat { NONE, ONE, ALL }
 
@@ -60,6 +67,7 @@ public final class AudioPlayerActivity extends Activity {
                 // 歌词更新与计时解耦：没加载 LRC 也该计时，以前「有歌词才统计」漏掉了大多数曲目
                 if (lyrics != null) updateLyrics(player.position());
                 long now = player.position();
+                if (debugLog) android.util.Log.d(TAG, "position=" + now + " playing=" + player.isPlaying() + " idx=" + currentIndex);
                 tickAudioStats();
                 lastPosition = now;
                 updateProgress(now);
@@ -130,7 +138,10 @@ public final class AudioPlayerActivity extends Activity {
     /** 切歌淡入迁到 {@link OpenLeafPlayer#startFadeIn()}（内部仍用 AudioDsp.GainRamp）。 */
 
     private TextView titleView, lyricView, positionView, repeatView, shuffleView, mediaKeyHint;
-    private TextView speedView; // 0.43.0 播放倍速按钮，文案随 cycleSpeed 更新
+    /** v2.2：常驻 speedView 不再创建，倍速值改由「更多」菜单按 speedLabel() 动态生成；cycleSpeed 的空守卫保持不变。 */
+    private TextView speedView;
+    /** v2.2：一次点按入口的队列按钮，label 随队列长度更新。 */
+    private Button queueButton;
     private SeekBar seekBar;
     private boolean seeking;
     private AudioManager audioManager;
@@ -163,6 +174,7 @@ public final class AudioPlayerActivity extends Activity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        debugLog = (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         restoreState();
         buildUi();
@@ -223,31 +235,32 @@ public final class AudioPlayerActivity extends Activity {
         controls.addView(play);
         controls.addView(Ui.button(this, "⏭ 下一首", this::next, "下一首"));
         root.addView(controls);
+
+        // v2.2 一次点按入口：歌词 / 队列 / 音效常驻；低频与配置型操作收进「更多」。
+        LinearLayout quickRow = Ui.row(this);
+        quickRow.addView(Ui.button(this, "歌词", this::openLyricsPanel, "查看歌词"));
+        queueButton = Ui.button(this, "队列 " + queue.size(), this::openQueuePanel, "查看播放队列");
+        quickRow.addView(queueButton);
+        quickRow.addView(Ui.button(this, "♪ 音效", this::openSoundPanel, "音效设置"));
+        quickRow.addView(Ui.button(this, "更多", this::openMoreMenu, "更多播放操作"));
+        root.addView(quickRow);
+
         LinearLayout modes = Ui.row(this);
         shuffleView = Ui.button(this, "随机：关", this::toggleShuffle, "随机播放");
         repeatView = Ui.button(this, "循环：关", this::toggleRepeat, "循环模式");
-        speedView = Ui.button(this, speedLabel(), this::cycleSpeed, "播放倍速");
-        modes.addView(shuffleView); modes.addView(repeatView); modes.addView(speedView);
+        modes.addView(shuffleView); modes.addView(repeatView); // v2.2：倍速移入「更多」
         root.addView(modes);
-        Ui.gap(root, 12);
-        LinearLayout sleepRow = Ui.row(this);
-        sleepRow.addView(Ui.button(this, "睡眠 15 分", () -> setSleep(15), "设置睡眠定时 15 分钟"));
-        sleepRow.addView(Ui.button(this, "睡眠 30 分", () -> setSleep(30), "设置睡眠定时 30 分钟"));
-        sleepRow.addView(Ui.button(this, "关闭睡眠", this::cancelSleep, "关闭睡眠定时"));
-        root.addView(sleepRow);
+
+        // v2.2：睡眠仅保留常驻状态行（文案由 setSleep/cancelSleep/sleepTicker 原样更新），三按钮移入「更多」。
         sleepView = Ui.text(this, "睡眠：关", 12, Ui.MUTED);
         root.addView(sleepView);
         Ui.gap(root, 12);
-        root.addView(Ui.button(this, "＋ 添加音频文件", this::pickAudio, "添加音频文件"));
-        root.addView(Ui.button(this, "⏭ 下一首播放", this::pickPlayNext, "将音频插入到下一首播放"));
-        root.addView(Ui.button(this, "＋ 选择歌词(.lrc/.srt/.txt)", this::pickLyrics, "选择歌词"));
-        root.addView(Ui.button(this, "♪ 音效（EQ / 限幅 / 频谱）", this::openSoundPanel, "音效设置"));
+
         spectrumView = new SpectrumView(this);
         spectrumView.setContentDescription("实时频谱");
         spectrumView.setVisibility(spectrumOn ? View.VISIBLE : View.GONE);
         spectrumVisible = spectrumOn;
         root.addView(spectrumView, new LinearLayout.LayoutParams(-1, Ui.dp(this, 96)));
-        root.addView(Ui.button(this, "⏹ 停止并退出", this::finish, "停止播放并退出"));
     }
 
     private void pickAudio() {
@@ -318,6 +331,7 @@ public final class AudioPlayerActivity extends Activity {
     /** 阶段 2-A：音效面板（EQ 5 段 + softClip 限幅 + 实时频谱）。 */
     @androidx.media3.common.util.UnstableApi
     private void openSoundPanel() {
+        if (debugLog) android.util.Log.d(TAG, "panel=effect action=open");
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 16);
         TextView capabilityNote = Ui.text(this, "", 12, Ui.MUTED);
@@ -325,6 +339,7 @@ public final class AudioPlayerActivity extends Activity {
         if (capabilityMessage.isEmpty()) capabilityNote.setVisibility(View.GONE);
         else capabilityNote.setText(capabilityMessage);
         panel.addView(capabilityNote);
+        panel.addView(Ui.text(this, "均衡器", 11, Ui.MUTED)); // v2.2 分组小标题：不改任何控件行为
         addToggleRow(this, panel, "均衡器（5 段）", eqOn, v -> {
             eqOn = v; applyAudioChain(); saveState();
         });
@@ -354,6 +369,7 @@ public final class AudioPlayerActivity extends Activity {
             panel.addView(row);
             bars[idx] = bar;
         }
+        panel.addView(Ui.text(this, "动态与可视化", 11, Ui.MUTED)); // v2.2 分组小标题
         addToggleRow(this, panel, "峰值限幅（softClip）", clipOn, v -> {
             clipOn = v; applyAudioChain(); saveState();
         });
@@ -370,6 +386,134 @@ public final class AudioPlayerActivity extends Activity {
                     for (int i = 0; i < bars.length; i++) eqGains[i] = bars[i].getProgress() / 10f - 12f;
                     applyAudioChain();
                     saveState();
+                })
+                .setOnDismissListener(d -> {
+                    if (debugLog) android.util.Log.d(TAG, "panel=effect action=close");
+                }).show();
+    }
+
+    // ---------- v2.2：一次点按面板与分层菜单 ----------
+
+    /**
+     * v2.2 更多菜单：标签与动作成对 append，which 即动态索引，不错配（沿用 v2.1 ReaderActivity 已验证模式）。
+     * 倍速、睡眠、导入、插队、停止都收进这里；常驻区只保留播控与三个一次点按面板入口。
+     */
+    private void openMoreMenu() {
+        final ArrayList<String> labels = new ArrayList<>();
+        final ArrayList<Runnable> actions = new ArrayList<>();
+        // 倍速 label 由 speedLabel() 的当前值派生，保持单一真源（形如「倍速：1.0×」）。
+        labels.add(speedLabel().replace("速度：", "倍速："));
+        actions.add(() -> {
+            cycleSpeed();
+            Toast.makeText(this, speedLabel(), Toast.LENGTH_SHORT).show(); // 关闭菜单后仍可见新值
+        });
+        labels.add(sleepLabel()); // 由 sleepView 文案派生，含「N 分钟剩余 / 关」
+        actions.add(this::cycleSleepFromMore);
+        labels.add("添加音频文件"); actions.add(this::pickAudio);
+        labels.add("下一首播放"); actions.add(this::pickPlayNext);
+        labels.add("选择歌词(.lrc/.srt/.txt)"); actions.add(this::pickLyrics);
+        labels.add("停止并退出"); actions.add(this::finish); // 原 desc「停止播放并退出」语义保留
+        new AlertDialog.Builder(this).setTitle("更多播放操作")
+                .setItems(labels.toArray(new String[0]), (d, which) -> {
+                    if (which >= 0 && which < actions.size()) actions.get(which).run();
+                }).setNegativeButton("关闭", null).show();
+    }
+
+    /** 睡眠 label 直接读常驻 sleepView 文案；无定时器/关闭态显示「关」，否则显示剩余时间。 */
+    private String sleepLabel() {
+        String text = sleepView == null ? "" : sleepView.getText().toString();
+        String state = text.startsWith("睡眠：") ? text.substring("睡眠：".length()) : text;
+        if (state.isEmpty() || state.contains("关")) return "睡眠定时（关）";
+        return "睡眠定时（" + state + "剩余）";
+    }
+
+    /** 更多菜单里的睡眠项：关→15→30→关，仅复用已有 setSleep/cancelSleep，不碰播放器。 */
+    private void cycleSleepFromMore() {
+        if (sleepTimer.kind() != SpeechText.SleepTimer.Kind.MINUTES) { setSleep(15); return; }
+        long left = sleepTimer.remainingSeconds(SystemClock.elapsedRealtime());
+        if (left <= 15 * 60L) setSleep(30);
+        else cancelSleep();
+    }
+
+    /** 队列按钮 label 随队列长度更新；只读 UI，不改队列顺序、不重建播放器。 */
+    private void updateQueueButtonLabel() {
+        if (queueButton != null) queueButton.setText("队列 " + queue.size());
+    }
+
+    /**
+     * v2.2 歌词查看面板：快照式展示，打开时 setText 一次。不在 ticker 里刷新面板内容，
+     * 因此不抢用户手动滚动位置；Dialog 只 setView/show，不碰播放器。
+     */
+    private void openLyricsPanel() {
+        if (debugLog) android.util.Log.d(TAG, "panel=lyrics action=open");
+        ScrollView scroll = new ScrollView(this);
+        TextView content = Ui.text(this, "", 14, Ui.INK);
+        Ui.pad(content, 12);
+        if (lyrics == null || lyrics.isEmpty()) {
+            content.setText("未加载歌词，可在更多→选择歌词导入");
+        } else if (lyrics.get(0).timeMs < 0) {
+            // 纯文本歌词（TXT）：无时间轴，如实标注不支持按播放位置定位，全量展示。
+            StringBuilder sb = new StringBuilder();
+            for (Lyrics.Line line : lyrics) {
+                if (sb.length() > 0) sb.append('\n');
+                sb.append(line.text);
+            }
+            sb.append("\n\n（纯文本歌词无时间轴，不支持按播放位置定位）");
+            content.setText(sb.toString());
+        } else {
+            // 带时间戳：用当前播放位置找最近一句（与常驻 lyricView 同一口径），置顶展示并标注。
+            long position = player == null ? 0L : player.position();
+            int current = 0;
+            for (int i = 0; i < lyrics.size(); i++) {
+                if (lyrics.get(i).timeMs <= position) current = i; else break;
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append("当前句：").append(lyrics.get(current).text).append("\n\n");
+            for (int i = 0; i < lyrics.size(); i++) {
+                if (sb.length() > 0) sb.append('\n');
+                sb.append(i == current ? "▶ " : "   ").append(lyrics.get(i).text);
+            }
+            content.setText(sb.toString());
+        }
+        scroll.addView(content);
+        new AlertDialog.Builder(this).setTitle("歌词").setView(scroll)
+                .setNegativeButton("关闭", null)
+                .setOnDismissListener(d -> {
+                    if (debugLog) android.util.Log.d(TAG, "panel=lyrics action=close");
+                }).show();
+    }
+
+    /**
+     * v2.2 队列查看面板：只读展示「正在播放 / 接下来」，不改队列顺序、不重建播放器。
+     * 空队列提供「添加音频」引导到 pickAudio；队列项不响应点击（插队仍走「下一首播放」）。
+     */
+    private void openQueuePanel() {
+        if (debugLog) android.util.Log.d(TAG, "panel=queue action=open");
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout panel = Ui.column(this);
+        Ui.pad(panel, 16);
+        if (queue.isEmpty()) {
+            panel.addView(Ui.text(this, "队列为空，可添加音频", 13, Ui.MUTED));
+            panel.addView(Ui.button(this, "＋ 添加音频", this::pickAudio, "添加音频文件"));
+        } else {
+            panel.addView(Ui.text(this, "正在播放", 11, Ui.MUTED));
+            String playing = currentIndex >= 0 && currentIndex < queue.size()
+                    ? displayName(queue.get(currentIndex)) : "（无）";
+            panel.addView(Ui.text(this, "▶ " + playing, 14, Ui.INK));
+            panel.addView(Ui.text(this, "接下来", 11, Ui.MUTED));
+            if (currentIndex + 1 >= queue.size()) {
+                panel.addView(Ui.text(this, "队列已到末尾", 12, Ui.MUTED));
+            } else {
+                for (int i = currentIndex + 1; i < queue.size(); i++) {
+                    panel.addView(Ui.text(this, (i - currentIndex) + ". " + displayName(queue.get(i)), 13, Ui.INK));
+                }
+            }
+        }
+        scroll.addView(panel);
+        new AlertDialog.Builder(this).setTitle("播放队列（" + queue.size() + "）").setView(scroll)
+                .setNegativeButton("关闭", null)
+                .setOnDismissListener(d -> {
+                    if (debugLog) android.util.Log.d(TAG, "panel=queue action=close");
                 }).show();
     }
 
@@ -433,6 +577,7 @@ public final class AudioPlayerActivity extends Activity {
             // 防回归：shuffle 打开时 originalOrder 也必须收录，否则用户关闭 shuffle 时
             // queue.clear()+addAll(originalOrder) 会把刚插队的这一首直接丢弃。
             if (shuffled && originalOrder != null) originalOrder.add(value);
+            updateQueueButtonLabel();
             saveState();
             return; // 当前曲目继续播放，不切歌
         }
@@ -441,6 +586,7 @@ public final class AudioPlayerActivity extends Activity {
         catch (SecurityException ignored) { }
         queue.add(uri.toString());
         if (currentIndex < 0) currentIndex = queue.size() - 1;
+        updateQueueButtonLabel();
         saveState();
         playCurrent();
     }
@@ -490,6 +636,7 @@ public final class AudioPlayerActivity extends Activity {
             // 阶段 2-A：仅当任一音效开启时才挂处理器链；默认全关走原构造，零回归
             AudioProcessorChain chain = (eqOn || clipOn || spectrumOn) ? new AudioProcessorChain() : null;
             OpenLeafPlayer candidate = new OpenLeafPlayer(this, chain);
+            if (debugLog) android.util.Log.d(TAG, "create id=" + ++debugInstanceSeq);
             if (chain != null) {
                 chain.setState(eqOn, clipOn, spectrumOn, eqGains);
             }
@@ -567,6 +714,7 @@ public final class AudioPlayerActivity extends Activity {
 
     private void releasePlayer() {
         if (player != null) {
+            if (debugLog) android.util.Log.d(TAG, "release id=" + debugInstanceSeq);
             player.release();
             player = null;
         }

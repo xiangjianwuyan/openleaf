@@ -37,6 +37,12 @@ import java.util.Locale;
  * 避免 ExoPlayer 内部焦点处理与既有回调双重管理造成行为漂移。</p>
  */
 public final class OpenLeafPlayer {
+    /** debug-only 播放状态日志 tag；所有日志由 debugLog 守卫。 */
+    private static final String TAG = "OL-PlaybackState";
+    /** debuggable 包才输出日志；构造器由 Context 的 FLAG_DEBUGGABLE 计算一次。 */
+    private final boolean debugLog;
+    /** 仅用于 debug 日志的 setMediaItem 重绑序号（非 debuggable 下不递增、不打日志）。 */
+    private int debugMediaItemSeq;
     /** 与 §5.4 对齐；异常 reason 使用 §6.4 固定短串。 */
     public interface Listener {
         void onPrepared();
@@ -62,6 +68,7 @@ public final class OpenLeafPlayer {
      * 并显式关闭 audio offload —— 否则 processor 会被静默绕过、开关无效且无报错。
      */
     @UnstableApi public OpenLeafPlayer(Context context, AudioProcessorChain chain) {
+        this.debugLog = (context.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         this.audioChain = chain;
         AudioAttributes attributes = new AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
@@ -107,6 +114,7 @@ public final class OpenLeafPlayer {
                 if (listener != null) listener.onTracksChanged();
             }
         });
+        if (debugLog) android.util.Log.d(TAG, "construct chain=" + (chain != null));
     }
 
     /** 供后续 media3 MediaSession（T03）绑定；T02 不建会话、不新增组件。 */
@@ -137,6 +145,12 @@ public final class OpenLeafPlayer {
     /** 装载媒体并立即 prepare；重复调用会替换当前 item（Activity 切歌走 release + 重建）。 */
     public void setMediaItem(Uri uri, String mime) {
         if (uri == null) throw new IllegalArgumentException("uri 不能为空");
+        if (debugLog) {
+            // 隐私：只打 URI 最后一段（文件名/文档 id），绝不打完整 content:// 或文件路径
+            String safeUri = uri.getLastPathSegment();
+            if (safeUri == null || safeUri.isEmpty()) safeUri = "<uri>";
+            android.util.Log.d(TAG, "setMediaItem seq=" + ++debugMediaItemSeq + " uri=" + safeUri + " mime=" + mime);
+        }
         MediaItem.Builder builder = new MediaItem.Builder().setUri(uri);
         if (mime != null && !mime.isEmpty()) builder.setMimeType(mime);
         if (subtitle != null) builder.setSubtitleConfigurations(Collections.singletonList(subtitle));
@@ -209,6 +223,7 @@ public final class OpenLeafPlayer {
 
     /** 释放播放器与淡入回调；调用后本实例不可再用。 */
     public void release() {
+        if (debugLog) android.util.Log.d(TAG, "release");
         fadeHandler.removeCallbacks(fadeRunnable);
         fadeRunnable = null;
         listener = null;
