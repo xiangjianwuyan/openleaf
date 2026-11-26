@@ -63,8 +63,11 @@ public final class MainActivity extends Activity {
     // 搜索防抖：快速输入时合并为一次书库渲染，避免每次按键都 removeAllViews + 入队
     private final android.os.Handler mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private LinearLayout shelfList;
-    private final Runnable delayedSearch = () -> renderShelf(shelfList, false);
+    private final Runnable delayedSearch = () -> renderShelf(shelfList, true);
     private ScrollView libraryScroll;
+    private String shelfScope;
+    private int shelfScrollY;
+    private boolean shelfPopulated;
     private int tab, bookPage;
     private String query = "";
     private String folderId;
@@ -112,6 +115,8 @@ public final class MainActivity extends Activity {
             folderLabel = state.getString("folderLabel", ROOT_LABEL);
             organizing = state.getBoolean("organizing", false);
             favoritesOnly = state.getBoolean("favoritesOnly", favoritesOnly);
+            shelfScrollY = Math.max(0, state.getInt("shelfScrollY", 0));
+            shelfScope = state.getString("shelfScope", libraryScope());
             ArrayList<String> selectedBooks = state.getStringArrayList("selectedBookIds");
             if (selectedBooks != null) selectedBookIds.addAll(selectedBooks);
             ArrayList<String> ids = state.getStringArrayList("ancestorIds");
@@ -269,6 +274,8 @@ public final class MainActivity extends Activity {
         super.onSaveInstanceState(out);
         out.putInt("tab", tab);
         out.putString("query", query);
+        out.putString("shelfScope", shelfScope);
+        out.putInt("shelfScrollY", shelfPopulated && libraryScroll != null ? libraryScroll.getScrollY() : shelfScrollY);
         out.putInt("bookPage", bookPage);
         out.putString("folderId", folderId);
         out.putString("folderLabel", folderLabel);
@@ -347,14 +354,28 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private String libraryScope() {
+        String folder = folderId == null ? "" : folderId;
+        return (favoritesOnly ? "favorites:" : "shelf:") + folder + "\n" + query;
+    }
+
     private void show() {
         if (isDestroyed() || page == null) return;
+        if (shelfPopulated && libraryScroll != null) shelfScrollY = libraryScroll.getScrollY();
+        if (tab == 0) {
+            String scope = libraryScope();
+            if (!scope.equals(shelfScope)) shelfScrollY = 0;
+            shelfScope = scope;
+        }
+        mainHandler.removeCallbacks(delayedSearch);
         navigation();
         libraryRequest++;
         selectionCount = null; addArchiveButton = null; moveArchiveButton = null; unfileButton = null;
         visibleBooks.clear();visibleChecks.clear();
         searchInput = null;
+        shelfList = null;
         libraryScroll = null;
+        shelfPopulated = false;
         page.removeAllViews();
         if (tab == 0) library();
         else if (tab == 1) network();
@@ -375,15 +396,19 @@ public final class MainActivity extends Activity {
     private void library() {
         LinearLayout body = content();
         LinearLayout titleRow=Ui.row(this);
-        LinearLayout titles=Ui.column(this);titles.addView(Ui.title(this,"书库",28));titles.addView(Ui.text(this,"每一本书，都是一个新的世界",12,Ui.MUTED));titleRow.addView(titles,Ui.weight());
+        titleRow.addView(Ui.title(this,"书库",28),Ui.weight());
         Button importBtn=Ui.primary(this,"＋ 导入",()->new AlertDialog.Builder(this).setTitle("导入书籍").setItems(new String[]{"添加文件（含标签与书评书包）","扫描文件夹"},(d,which)->{if(which==0)pickFiles();else startActivity(new Intent(this,FolderImportActivity.class));}).show());
         importBtn.setContentDescription("导入书籍");
         titleRow.addView(importBtn);
         body.addView(titleRow);Ui.gap(body,20);
         LinearLayout searchRow=Ui.row(this);
         EditText search=new EditText(this);searchInput=search;search.setSingleLine(true);search.setTextSize(14);search.setTextColor(Ui.INK);search.setHintTextColor(Ui.MUTED);search.setHint("搜索书名、标签…");search.setContentDescription("搜索书名、标签");search.setText(query);search.setBackground(Ui.outline(this,Color.WHITE,10));search.setPadding(Ui.dp(this,16),0,Ui.dp(this,12),0);
-        LinearLayout.LayoutParams searchParams=new LinearLayout.LayoutParams(0,Ui.dp(this,46),1);searchParams.rightMargin=Ui.dp(this,10);searchRow.addView(search,searchParams);
-        Button view=Ui.button(this,gridMode?"☷ 列表":"▦ 网格",()->{gridMode=!gridMode;getSharedPreferences("shelf",0).edit().putBoolean("grid",gridMode).apply();show();},"切换网格与列表视图");searchRow.addView(view);body.addView(searchRow);Ui.gap(body,16);
+        search.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+        LinearLayout.LayoutParams searchParams=new LinearLayout.LayoutParams(0,Ui.dp(this,46),1);searchParams.rightMargin=Ui.dp(this,8);searchRow.addView(search,searchParams);
+        Button clearSearch = Ui.button(this, "清除", () -> search.setText(""), "清除搜索词");
+        clearSearch.setVisibility(query.isEmpty() ? View.GONE : View.VISIBLE);
+        searchRow.addView(clearSearch);
+        body.addView(searchRow);Ui.gap(body,12);
         Button wall=Ui.button(this,hideBookTitles?"▦ 显示书名":"▤ 封面墙",()->{
             hideBookTitles=!hideBookTitles;
             getSharedPreferences("shelf",0).edit().putBoolean("hideBookTitles",hideBookTitles).apply();
@@ -399,13 +424,19 @@ public final class MainActivity extends Activity {
         modes.addView(all);modes.addView(folders);modes.addView(favorites);View fill=new View(this);modes.addView(fill,new LinearLayout.LayoutParams(0,1,1));
         modes.addView(Ui.button(this,organizing?"完成":"选择",()->{organizing=!organizing;if(!organizing)selectedBookIds.clear();show();},"切换批量选择模式"));body.addView(modes);
         if(!ALL_BOOKS.equals(folderId))breadcrumb(body);
+        HorizontalScrollView toolStrip = new HorizontalScrollView(this);
+        toolStrip.setHorizontalScrollBarEnabled(false);
+        toolStrip.setFillViewport(true);
         LinearLayout tools=Ui.row(this);
-        tools.addView(Ui.button(this,"＋ 新建文件夹",this::createFolder,"新建文件夹"));View toolFill=new View(this);tools.addView(toolFill,new LinearLayout.LayoutParams(0,1,1));
+        tools.addView(Ui.button(this,gridMode?"☷ 列表":"▦ 网格",()->{gridMode=!gridMode;getSharedPreferences("shelf",0).edit().putBoolean("grid",gridMode).apply();show();},"切换网格与列表视图"));
+        tools.addView(Ui.button(this,"＋ 新建文件夹",this::createFolder,"新建文件夹"));
+        Spinner sorting=new Spinner(this);sorting.setContentDescription("选择书籍排序方式");sorting.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"最近导入","书名","最近阅读"}));sorting.setSelection(sortOrder);tools.addView(sorting);
         tools.addView(Ui.button(this,"漫画",()->startActivity(new Intent(this,ComicActivity.class)),"打开漫画"));
         tools.addView(Ui.button(this,"听书",()->startActivity(new Intent(this,TtsActivity.class)),"打开听书"));
         tools.addView(Ui.button(this,"音频",()->startActivity(new Intent(this,AudioPlayerActivity.class)),"打开音频播放器"));
         tools.addView(Ui.button(this,"任务",()->startActivity(new Intent(this,JobsActivity.class)),"打开任务中心"));
-        Spinner sorting=new Spinner(this);sorting.setContentDescription("选择书籍排序方式");sorting.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"最近导入","书名","最近阅读"}));sorting.setSelection(sortOrder);tools.addView(sorting);body.addView(tools);Ui.gap(body,12);
+        toolStrip.addView(tools);
+        body.addView(toolStrip);Ui.gap(body,12);
         if(organizing)selectionTools(body);
 
         LinearLayout list = Ui.column(this);
@@ -424,12 +455,29 @@ public final class MainActivity extends Activity {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
             @Override public void afterTextChanged(Editable s) { }
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
-                if(!query.equals(s.toString()))clearForScopeChange();
-                query = s.toString();
+                String nextQuery = s.toString();
+                if (query.equals(nextQuery)) return;
+                clearForScopeChange();
+                query = nextQuery;
+                clearSearch.setVisibility(query.isEmpty() ? View.GONE : View.VISIBLE);
                 bookPage = 0;
+                shelfScope = libraryScope();
+                shelfScrollY = 0;
+                shelfPopulated = false;
+                libraryRequest++; // Do not show results for an older query during the debounce window.
+                if (visibleBooks.size() > 0 || list.getChildCount() > 1) showShelfLoading(list);
                 mainHandler.removeCallbacks(delayedSearch);
                 mainHandler.postDelayed(delayedSearch, 250);
             }
+        });
+        search.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId != android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) return false;
+            mainHandler.removeCallbacks(delayedSearch);
+            renderShelf(list, true);
+            android.view.inputmethod.InputMethodManager keyboard =
+                    (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (keyboard != null) keyboard.hideSoftInputFromWindow(search.getWindowToken(), 0);
+            return true;
         });
     }
 
@@ -548,7 +596,7 @@ public final class MainActivity extends Activity {
         ancestorLabels.add(ROOT_LABEL);
         // R-A-09：施加珍藏筛选时保留纯文字关键词（如 qqq）。仅当当前是 #标签查询时才清空，
         // 避免标签查询与珍藏筛选叠加；纯文字词原样保留，show()→library() 会 setText(query) 恢复输入框。
-        if (query.trim().startsWith("#")) query = "";
+        if (searchKey(query).trim().startsWith("#")) query = "";
         bookPage = 0;
         getSharedPreferences("shelf",0).edit().putBoolean("favoritesOnly",true).apply();
         show();
@@ -586,7 +634,17 @@ public final class MainActivity extends Activity {
         show();
     }
 
+    private void showShelfLoading(LinearLayout list) {
+        visibleBooks.clear();visibleChecks.clear();
+        list.removeAllViews();
+        list.addView(Ui.text(this, "正在读取书架…", 13, Ui.MUTED));
+    }
+
     private void renderShelf(LinearLayout list, boolean scrollTop) {
+        if (list == null || list != shelfList || isDestroyed()) return;
+        if (scrollTop) shelfScrollY = 0;
+        else if (shelfPopulated && libraryScroll != null) shelfScrollY = libraryScroll.getScrollY();
+        shelfPopulated = false;
         final long request = ++libraryRequest;
         final String rawFilter = searchKey(query).trim();
         final boolean tagsOnly = rawFilter.startsWith("#");
@@ -594,73 +652,79 @@ public final class MainActivity extends Activity {
         final String currentFolder = folderId;
         final int sorting = sortOrder;
         final boolean favoriteFilter = favoritesOnly;
-        visibleBooks.clear();visibleChecks.clear();
-        list.removeAllViews();
-        list.addView(Ui.text(this, "正在读取书架…", 13, Ui.MUTED));
+        showShelfLoading(list);
         worker.execute(() -> {
             if (request != libraryRequest) return;
             try {
                 List<BookStore.Folder> folders = new ArrayList<>();
                 List<BookStore.Book> books = new ArrayList<>();
-                int totalBooks;
                 Map<String, List<String>> tags = store.allTags();
                 Map<String,BookMetadataStore.Card> metadata=new BookMetadataStore(this).cards();
                 boolean searching = tagsOnly || !filter.isEmpty();
                 if (searching || ALL_BOOKS.equals(currentFolder)) {
                     List<BookStore.Book> all = store.all();
-                    totalBooks = all.size();
-                    if (searching && !tagsOnly) {
-                        // 先做子串匹配；无结果时用容错搜索（借鉴 Shelf：错一字/相邻转置仍可召回）
-                        for (BookStore.Book book : all)
-                            if (searchKey(book.title).contains(filter)) books.add(book);
-                        if (books.isEmpty()) {
+                    for (BookStore.Book book : all) {
+                        BookMetadataStore.Card card = metadata.get(book.id);
+                        if (!favoriteFilter || (card != null && card.favorite)) books.add(book);
+                    }
+                    if (tagsOnly) {
+                        if (filter.isEmpty()) books.clear();
+                        else books.removeIf(book -> !hasMatchingTag(tags, book.id, filter));
+                    } else if (searching) {
+                        List<BookStore.Book> candidates = new ArrayList<>(books);
+                        books.removeIf(book -> !searchKey(book.title).contains(filter)
+                                && !hasMatchingTag(tags, book.id, filter));
+                        // 容错只在当前范围没有直接匹配时启用，不遮盖书名或标签的普通匹配。
+                        if (books.isEmpty() && !candidates.isEmpty()) {
                             org.openleaf.reader.core.FuzzySearch.Index index = fuzzyIndexFor(all, tags);
-                            if (index != null) {
-                                java.util.Set<String> matched = new java.util.HashSet<>();
-                                for (org.openleaf.reader.core.FuzzySearch.Hit hit : org.openleaf.reader.core.FuzzySearch.search(index, filter, 60))
-                                    matched.add(hit.document.id);
-                                for (BookStore.Book book : all) if (matched.contains(book.id)) books.add(book);
-                            }
-                        }
-                    } else {
-                        for (BookStore.Book book : all) {
-                            if (!searching || tags.getOrDefault(book.id, Collections.emptyList()).stream().anyMatch(tag -> searchKey(tag).contains(filter))) books.add(book);
+                            java.util.Set<String> matched = new java.util.HashSet<>();
+                            int limit = favoriteFilter ? all.size() : 60;
+                            for (org.openleaf.reader.core.FuzzySearch.Hit hit : org.openleaf.reader.core.FuzzySearch.search(index, filter, limit))
+                                matched.add(hit.document.id);
+                            for (BookStore.Book book : candidates) if (matched.contains(book.id)) books.add(book);
                         }
                     }
                 } else {
                     BookStore.ShelfContents contents = store.shelf(currentFolder);
                     folders.addAll(contents.folders);
                     books.addAll(contents.books);
-                    totalBooks = books.size();
-                }
-                if (favoriteFilter) {
-                    ArrayList<BookStore.Book> kept = new ArrayList<>();
-                    for (BookStore.Book book : books) {
-                        BookMetadataStore.Card card = metadata.get(book.id);
-                        if (card != null && card.favorite) kept.add(book);
-                    }
-                    books.clear();
-                    books.addAll(kept);
-                    folders.clear();
                 }
                 Collator collator=Collator.getInstance(Locale.CHINA);
                 Collections.sort(folders,(a,b)->{int byName=collator.compare(a.name,b.name);return byName!=0?byName:a.id.compareTo(b.id);});
+                SharedPreferences reading = getSharedPreferences("reader", MODE_PRIVATE);
                 Map<String,Long> opened=new HashMap<>();
-                if(sorting==2){SharedPreferences reading=getSharedPreferences("reader",0);for(BookStore.Book book:books)opened.put(book.id,reading.getLong("opened_"+book.id,0));}
+                boolean mayContinue = !searching && !favoriteFilter && ALL_BOOKS.equals(currentFolder);
+                BookStore.Book latest = null;
+                long latestOpened = 0;
+                if (sorting == 2 || mayContinue) {
+                    for (BookStore.Book book : books) {
+                        long time = reading.getLong("opened_" + book.id, 0);
+                        if (sorting == 2) opened.put(book.id, time);
+                        if (mayContinue && time > 0 && (time > latestOpened
+                                || (time == latestOpened && latest != null && book.id.compareTo(latest.id) < 0))) {
+                            latest = book;
+                            latestOpened = time;
+                        }
+                    }
+                }
+                final BookStore.Book resumeBook = latest;
+                final String resumePosition = resumeBook == null ? "" : savedPosition(reading, resumeBook);
                 Collections.sort(books,(a,b)->{
                     int result=sorting==1?collator.compare(a.title,b.title):sorting==2
                             ?Long.compare(opened.get(b.id),opened.get(a.id)):Long.compare(b.added,a.added);
                     if(result==0)result=collator.compare(a.title,b.title);
                     return result!=0?result:a.id.compareTo(b.id);
                 });
-                final int count = totalBooks;
                 runOnUiThread(() -> {
                     if (isDestroyed() || request != libraryRequest) return;
                     cardMetadata=metadata;
-                    populateShelf(list, folders, books, searching, count, tags);
-                    if (scrollTop && libraryScroll != null) libraryScroll.post(() -> {
-                        if (!isDestroyed() && request == libraryRequest && libraryScroll != null)
-                            libraryScroll.scrollTo(0, 0);
+                    populateShelf(list, folders, books, searching, tagsOnly, filter, tags, resumeBook, resumePosition);
+                    ScrollView scroll = libraryScroll;
+                    if (scroll != null) scroll.post(() -> {
+                        if (!isDestroyed() && request == libraryRequest && scroll == libraryScroll) {
+                            scroll.scrollTo(0, shelfScrollY);
+                            shelfPopulated = true;
+                        }
                     });
                 });
             } catch (Exception e) {
@@ -672,6 +736,7 @@ public final class MainActivity extends Activity {
                             : "书架读取失败，请保留应用数据后重试。";
                     list.addView(Ui.text(this, message, 14, Ui.INK));
                     list.addView(Ui.text(this, exceptionMessage(e), 12, Ui.MUTED));
+                    list.addView(Ui.button(this, "重试", () -> renderShelf(list, false), "重新读取当前书架"));
                     list.addView(Ui.button(this, "返回来源文件夹顶层", this::rootFolder,"回到来源文件夹根目录"));
                 });
             }
@@ -679,19 +744,25 @@ public final class MainActivity extends Activity {
     }
 
     private void populateShelf(LinearLayout list, List<BookStore.Folder> folders,
-                               List<BookStore.Book> books, boolean searching, int totalBooks, Map<String, List<String>> tags) {
+                               List<BookStore.Book> books, boolean searching, boolean tagsOnly, String filter,
+                               Map<String, List<String>> tags, BookStore.Book resumeBook, String resumePosition) {
         list.removeAllViews();
         visibleBooks.clear();visibleChecks.clear();
         String summary;
-        if (favoritesOnly) summary = "★ 珍藏 · " + books.size() + " 本 / 全部 " + totalBooks + " 本";
-        else if (searching) summary = "全局搜索 · 找到 " + books.size() + " 本 / 全部 " + totalBooks + " 本";
+        if (tagsOnly && filter.isEmpty()) summary = "标签搜索";
+        else if (searching) summary = (favoritesOnly ? "在珍藏中搜索" : tagsOnly ? "标签搜索" : "全局搜索")
+                + " · 找到 " + books.size() + " 本";
+        else if (favoritesOnly) summary = "★ 珍藏 · " + books.size() + " 本";
         else if (ALL_BOOKS.equals(folderId)) summary = "全部书籍 · " + books.size() + " 本";
         else summary = "本层 · " + folders.size() + " 个文件夹 / " + books.size() + " 本书";
-        list.addView(Ui.text(this, summary, 13, Ui.MUTED));
+        TextView status = Ui.text(this, summary, 13, Ui.MUTED);
+        status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        list.addView(status);
         Ui.gap(list, 12);
         int totalItems = folders.size() + books.size();
         int pages = Math.max(1, (totalItems + ITEMS_PER_PAGE - 1) / ITEMS_PER_PAGE);
         bookPage = Math.max(0, Math.min(bookPage, pages - 1));
+        if (resumeBook != null && !organizing && bookPage == 0) addContinueCard(list, resumeBook, resumePosition);
         int start = bookPage * ITEMS_PER_PAGE;
         int end = Math.min(start + ITEMS_PER_PAGE, totalItems);
         LinearLayout gridRow=null;int gridColumn=0;
@@ -706,39 +777,7 @@ public final class MainActivity extends Activity {
         }
         if(gridMode&&gridColumn>0&&gridRow!=null)for(int n=gridColumn;n<columns;n++)gridRow.addView(new View(this),new LinearLayout.LayoutParams(0,1,1));
         updateSelectionCount();
-        if (totalItems == 0) {
-            Ui.gap(list, 20);
-            // 标语只描述"为什么空"，真正可点的动作放在独立 CTA 按钮上（Material/HIG 口径调和：
-            // 不把不可点的号召语写成标语）。读取/权限/解析失败在 renderShelf 的 catch 中单独渲染，
-            // 不会走到 populateShelf，因此这里只可能是"成功读到一个空结果"，不冒充失败态。
-            list.addView(Ui.text(this, favoritesOnly ? "还没有珍藏的书籍。打开书籍「详情」，勾选「珍藏」后即可在这里集中查看。"
-                    : searching ? "没有找到匹配的书名或标签。"
-                    : folderId == null ? "还没有归档目录，可扫描文件夹添加书籍。"
-                    : "当前文件夹没有直接归档的书籍或子文件夹。", 15, Ui.MUTED));
-            final String trimmedQuery = query == null ? "" : query.trim();
-            final boolean tagQuery = trimmedQuery.startsWith("#");           // 标签查询（含详情页回流）
-            final boolean keywordSearch = !trimmedQuery.isEmpty() && !tagQuery; // 纯文字关键词
-            final boolean favoriteFilter = favoritesOnly;
-            final boolean folderFilter = folderId != null && !ALL_BOOKS.equals(folderId);
-            final boolean anyFilter = favoriteFilter || tagQuery || folderFilter;
-            final boolean emptyLibrary = totalBooks == 0 && !keywordSearch && !anyFilter;
-            if (emptyLibrary) {
-                // 分支1：空库（无关键词、无筛选、全库确空）→ 导入本地书籍
-                Ui.gap(list, 12);
-                list.addView(Ui.button(this, "导入本地书籍", this::pickFiles, "导入本地书籍"));
-            } else {
-                // 分支3/4：有筛选 → 清除筛选（主 CTA）。分支2：有文字关键词 → 换个关键词。
-                // 两者并存时以清除筛选为主，并保留换个关键词入口，不牺牲任一修改路径。
-                if (anyFilter) {
-                    Ui.gap(list, 12);
-                    list.addView(Ui.button(this, "清除筛选", this::clearFiltersKeepKeyword, "清除筛选条件，保留关键词"));
-                }
-                if (keywordSearch) {
-                    Ui.gap(list, anyFilter ? 8 : 12);
-                    list.addView(Ui.button(this, "换个关键词", this::focusSearchInput, "聚焦并选中搜索词"));
-                }
-            }
-        }
+        if (totalItems == 0) addShelfEmptyState(list, searching, tagsOnly, filter);
         if (pages > 1) {
             LinearLayout pager = Ui.row(this);
             Button previous = Ui.button(this, "上一页", () -> {
@@ -761,6 +800,90 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void addContinueCard(LinearLayout list, BookStore.Book book, String position) {
+        LinearLayout card = Ui.row(this);
+        card.setBackground(Ui.outline(this, Color.WHITE, 14));
+        Ui.pad(card, 14);
+        LinearLayout info = Ui.column(this);
+        info.addView(Ui.text(this, "上次阅读", 12, Ui.MUTED));
+        Ui.gap(info, 4);
+        TextView title = Ui.title(this, book.title, 17);
+        title.setMaxLines(2);
+        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        info.addView(title);
+        String format = book.format.toUpperCase(Locale.ROOT);
+        info.addView(Ui.text(this, position.isEmpty() ? format : format + " · " + position, 12, Ui.MUTED));
+        LinearLayout.LayoutParams infoParams = Ui.weight();
+        infoParams.rightMargin = Ui.dp(this, 10);
+        card.addView(info, infoParams);
+        Button resume = Ui.primary(this, "继续阅读", () -> open(book));
+        resume.setContentDescription("继续阅读 " + book.title);
+        card.addView(resume);
+        list.addView(card);
+        Ui.gap(list, 12);
+    }
+
+    private static String savedPosition(SharedPreferences reading, BookStore.Book book) {
+        String id = book.id;
+        switch (book.format) {
+            case "pdf":
+                int count = reading.getInt("pdf_count_" + id, 0);
+                int page = reading.getInt("pdf_page_" + id, -1);
+                return page >= 0 && page < count ? "第 " + (page + 1) + " / " + count + " 页" : "";
+            case "epub":
+                int epubChapter = reading.getInt("epub_chapter_" + id, -1);
+                // EPUB 首章不一定是正文；用阅读位置序号而非章节标题或完成率。
+                return epubChapter >= 0 ? "阅读位置 " + ((long) epubChapter + 1) : "";
+            case "comic":
+                // 漫画进度由 ComicActivity 按内容键恢复，书架不推算百分比。
+                return "";
+            default:
+                int progress = reading.getInt("progress_" + id, -1);
+                return progress >= 0 && progress <= 100 ? "进度 " + progress + "%" : "";
+        }
+    }
+
+    private void addShelfEmptyState(LinearLayout list, boolean searching, boolean tagsOnly, String filter) {
+        boolean allBooks = ALL_BOOKS.equals(folderId);
+        boolean emptyLibrary = allBooks && !searching && !favoritesOnly;
+        boolean hasFilter = favoritesOnly || tagsOnly || !allBooks;
+        String title;
+        String message;
+        if (searching) {
+            title = tagsOnly && filter.isEmpty() ? "请输入标签名" : "未找到匹配的书籍";
+            message = tagsOnly && filter.isEmpty() ? "例如：#旅行" : favoritesOnly
+                    ? "当前只在珍藏中搜索。" : tagsOnly ? "没有书籍带有匹配的标签。" : "试试更短的书名或标签。";
+        } else if (favoritesOnly) {
+            title = "还没有珍藏的书籍";
+            message = "在书籍详情中勾选「珍藏」，即可在这里查看。";
+        } else if (emptyLibrary) {
+            title = "书库还是空的";
+            message = "导入本地书籍后，它们会显示在这里。";
+        } else {
+            title = folderId == null ? "还没有来源文件夹" : "此文件夹为空";
+            message = folderId == null ? "可通过导入菜单扫描文件夹。" : "当前层没有直接归档的书籍或子文件夹。";
+        }
+        LinearLayout panel = Ui.column(this);
+        panel.setBackground(Ui.outline(this, Color.WHITE, 14));
+        Ui.pad(panel, 16);
+        panel.addView(Ui.title(this, title, 17));
+        Ui.gap(panel, 4);
+        panel.addView(Ui.text(this, message, 14, Ui.MUTED));
+        Ui.gap(panel, 12);
+        if (emptyLibrary) {
+            panel.addView(Ui.primary(this, "导入本地书籍", this::pickFiles));
+        } else {
+            if (hasFilter) panel.addView(Ui.button(this, "清除筛选", this::clearFiltersKeepKeyword,
+                    tagsOnly ? "清除标签、珍藏与文件夹筛选" : "清除筛选条件，保留关键词"));
+            if (searching) {
+                if (hasFilter) Ui.gap(panel, 8);
+                panel.addView(Ui.button(this, tagsOnly ? "输入标签" : "换个关键词", this::focusSearchInput,
+                        "聚焦搜索框以修改搜索词"));
+            }
+        }
+        list.addView(panel);
+    }
+
     /** 空态 CTA「清除筛选」：清掉珍藏/文件夹/标签查询(#tag)筛选，但保留纯文字关键词与搜索框输入。 */
     private void clearFiltersKeepKeyword() {
         if (favoritesOnly) getSharedPreferences("shelf", 0).edit().putBoolean("favoritesOnly", false).apply();
@@ -772,11 +895,7 @@ public final class MainActivity extends Activity {
         ancestorLabels.clear();
         ancestorLabels.add(ROOT_LABEL);
         // 标签查询以 #tag 形式存在 query 中，属于筛选需清掉；纯文字关键词必须原样保留。
-        String trimmed = query == null ? "" : query.trim();
-        if (trimmed.startsWith("#")) {
-            query = "";
-            if (searchInput != null) searchInput.setText(""); // TextWatcher 同步把 query 写回 ""
-        }
+        if (searchKey(query).trim().startsWith("#")) query = "";
         bookPage = 0;
         clearForScopeChange();
         show();
@@ -787,6 +906,9 @@ public final class MainActivity extends Activity {
         if (searchInput != null) {
             searchInput.requestFocus();
             searchInput.selectAll();
+            android.view.inputmethod.InputMethodManager keyboard =
+                    (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (keyboard != null) keyboard.showSoftInput(searchInput, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
         }
     }
 
@@ -816,6 +938,13 @@ public final class MainActivity extends Activity {
                 startActivityForResult(intent,REQUEST_ORGANIZE);
             }).show();return true;
         });
+    }
+
+    private static boolean hasMatchingTag(Map<String, List<String>> tags, String id, String filter) {
+        for (String tag : tags.getOrDefault(id, Collections.emptyList())) {
+            if (searchKey(tag).contains(filter)) return true;
+        }
+        return false;
     }
 
     private static String searchKey(String text) { return java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFKC).toLowerCase(Locale.ROOT); }

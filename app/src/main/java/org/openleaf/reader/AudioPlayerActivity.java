@@ -6,6 +6,15 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.res.ColorStateList;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.database.Cursor;
@@ -16,8 +25,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.text.TextUtils;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
@@ -77,6 +89,8 @@ public final class AudioPlayerActivity extends Activity {
                     if (chain != null) { chain.refreshSpectrum(); spectrumView.setLevels(chain.drainSpectrum()); }
                 }
             }
+            if (player != null && !preparing && !playbackError) showTrackMetadata(player);
+            updatePlaybackStatus();
             main.postDelayed(this, 1000);
         }
     };
@@ -137,11 +151,15 @@ public final class AudioPlayerActivity extends Activity {
     }
     /** 切歌淡入迁到 {@link OpenLeafPlayer#startFadeIn()}（内部仍用 AudioDsp.GainRamp）。 */
 
-    private TextView titleView, lyricView, positionView, repeatView, shuffleView, mediaKeyHint;
-    /** v2.2：常驻 speedView 不再创建，倍速值改由「更多」菜单按 speedLabel() 动态生成；cycleSpeed 的空守卫保持不变。 */
-    private TextView speedView;
-    /** v2.2：一次点按入口的队列按钮，label 随队列长度更新。 */
-    private Button queueButton;
+    private static final int ACCENT = 0xFF355F51;
+    private static final int ACTIVE = 0xFFDCEAE2;
+    private static final int SURFACE = 0xFFF2F4F0;
+    private TextView titleView, subtitleView, lyricView, elapsedView, durationView, stateView, mediaKeyHint;
+    private Button playButton, previousButton, nextButton, queueButton, shuffleView, repeatView, addButton;
+    private RecordArtwork artwork;
+    private androidx.media3.common.MediaMetadata displayedMetadata;
+    private boolean preparing, playbackError;
+    private final java.util.Map<String, String> displayNames = new java.util.HashMap<>();
     private SeekBar seekBar;
     private boolean seeking;
     private AudioManager audioManager;
@@ -203,64 +221,224 @@ public final class AudioPlayerActivity extends Activity {
     private void buildUi() {
         LinearLayout root = Ui.column(this);
         Ui.mount(this, root);
-        root.addView(Ui.title(this, "本地音频", 22));
-        titleView = Ui.text(this, "未选择音频", 16, Ui.INK);
-        root.addView(titleView);
-        mediaKeyHint = Ui.text(this, "", 12, Ui.MUTED);
-        mediaKeyHint.setVisibility(View.GONE);
-        root.addView(mediaKeyHint);
-        lyricView = Ui.text(this, "♪", 15, Ui.MUTED);
-        lyricView.setMinLines(2);
-        root.addView(lyricView);
-        Ui.gap(root, 12);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, -1));
+        LinearLayout page = Ui.column(this);
+        int side = Ui.dp(this, 20);
+        page.setPadding(side, Ui.dp(this, 4), side, Ui.dp(this, 16));
+        scroll.addView(page, new ScrollView.LayoutParams(-1, -2));
+
+        LinearLayout toolbar = Ui.row(this);
+        toolbar.addView(iconButton("‹", "返回", this::finish));
+        TextView heading = Ui.title(this, "本地音频", 18);
+        heading.setGravity(Gravity.CENTER);
+        toolbar.addView(heading, Ui.weight());
+        toolbar.addView(iconButton("⋯", "更多播放操作", this::openMoreMenu));
+        page.addView(toolbar);
+        Ui.gap(page, 8);
+
+        FrameLayout cover = new FrameLayout(this);
+        GradientDrawable backdrop = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFFDDE8DC, 0xFFECECE0, 0xFFD5E3E0});
+        backdrop.setCornerRadius(Ui.dp(this, 26));
+        cover.setBackground(backdrop);
+        int coverSize = Ui.dp(this, Math.max(112, Math.min(200,
+                getResources().getConfiguration().screenWidthDp - 72)));
+        artwork = new RecordArtwork(this);
+        artwork.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        cover.addView(artwork, new FrameLayout.LayoutParams(coverSize, coverSize, Gravity.CENTER));
+        page.addView(cover, new LinearLayout.LayoutParams(-1, coverSize + Ui.dp(this, 22)));
+        Ui.gap(page, 8);
+
+        lyricView = Ui.text(this, "未加载歌词", 14, ACCENT);
+        lyricView.setGravity(Gravity.CENTER);
+        lyricView.setMaxLines(2);
+        lyricView.setEllipsize(TextUtils.TruncateAt.END);
+        page.addView(lyricView, new LinearLayout.LayoutParams(-1, -2));
+        Ui.gap(page, 12);
+
+        LinearLayout track = Ui.row(this);
+        LinearLayout trackInfo = Ui.column(this);
+        titleView = Ui.title(this, "未选择音频", 25);
+        titleView.setMaxLines(2);
+        titleView.setEllipsize(TextUtils.TruncateAt.END);
+        trackInfo.addView(titleView);
+        subtitleView = Ui.text(this, "从设备选择音频文件", 14, Ui.MUTED);
+        subtitleView.setMaxLines(2);
+        subtitleView.setEllipsize(TextUtils.TruncateAt.END);
+        trackInfo.addView(subtitleView);
+        track.addView(trackInfo, Ui.weight());
+        stateView = Ui.text(this, "", 12, ACCENT);
+        stateView.setGravity(Gravity.END);
+        stateView.setPadding(Ui.dp(this, 10), 0, 0, 0);
+        track.addView(stateView);
+        page.addView(track);
 
         seekBar = new SeekBar(this);
+        seekBar.setContentDescription("播放进度");
+        seekBar.setProgressTintList(ColorStateList.valueOf(ACCENT));
+        seekBar.setThumbTintList(ColorStateList.valueOf(ACCENT));
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onStartTrackingTouch(SeekBar s) { seeking = true; }
             @Override public void onStopTrackingTouch(SeekBar s) {
                 seeking = false;
-                if (player != null) { player.seekTo(s.getProgress()); lastPosition = s.getProgress(); }
+                seekFromControl(s.getProgress());
             }
-            @Override public void onProgressChanged(SeekBar s, int p, boolean fromUser) { }
+            @Override public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
+                if (!fromUser) return;
+                elapsedView.setText(time(p));
+                if (!seeking) seekFromControl(p); // 键盘或无障碍调节没有触摸结束回调
+            }
         });
-        root.addView(seekBar, new LinearLayout.LayoutParams(-1, -2));
-        positionView = Ui.text(this, "00:00 / 00:00", 12, Ui.MUTED);
-        root.addView(positionView);
-        Ui.gap(root, 16);
+        page.addView(seekBar, new LinearLayout.LayoutParams(-1, Ui.dp(this, 42)));
+        LinearLayout timeRow = Ui.row(this);
+        elapsedView = Ui.text(this, "00:00", 12, Ui.MUTED);
+        durationView = Ui.text(this, "—", 12, Ui.MUTED);
+        durationView.setGravity(Gravity.END);
+        timeRow.addView(elapsedView, Ui.weight());
+        timeRow.addView(durationView, Ui.weight());
+        page.addView(timeRow);
+        Ui.gap(page, 8);
 
         LinearLayout controls = Ui.row(this);
-        controls.addView(Ui.button(this, "⏮ 上一首", this::previous, "上一首"));
-        Button play = Ui.primary(this, "▶ 播放", this::togglePlay);
-        play.setContentDescription("播放或暂停"); // Ui.primary 为 3 参无 desc，手动补无障碍
-        controls.addView(play);
-        controls.addView(Ui.button(this, "⏭ 下一首", this::next, "下一首"));
-        root.addView(controls);
+        controls.setGravity(Gravity.CENTER);
+        previousButton = iconButton("⏮", "上一首", this::previous);
+        playButton = iconButton("▶", "播放", this::togglePlay);
+        playButton.setTextColor(0xFFFFFFFF);
+        playButton.setTextSize(26);
+        playButton.setBackground(audioRipple(ACCENT, 50));
+        nextButton = iconButton("⏭", "下一首", this::next);
+        controls.addView(previousButton, new LinearLayout.LayoutParams(Ui.dp(this, 54), Ui.dp(this, 50)));
+        LinearLayout.LayoutParams playSize = new LinearLayout.LayoutParams(Ui.dp(this, 68), Ui.dp(this, 68));
+        playSize.setMargins(Ui.dp(this, 22), 0, Ui.dp(this, 22), 0);
+        controls.addView(playButton, playSize);
+        controls.addView(nextButton, new LinearLayout.LayoutParams(Ui.dp(this, 54), Ui.dp(this, 50)));
+        page.addView(controls);
+        Ui.gap(page, 12);
 
-        // v2.2 一次点按入口：歌词 / 队列 / 音效常驻；低频与配置型操作收进「更多」。
         LinearLayout quickRow = Ui.row(this);
-        quickRow.addView(Ui.button(this, "歌词", this::openLyricsPanel, "查看歌词"));
-        queueButton = Ui.button(this, "队列 " + queue.size(), this::openQueuePanel, "查看播放队列");
-        quickRow.addView(queueButton);
-        quickRow.addView(Ui.button(this, "♪ 音效", this::openSoundPanel, "音效设置"));
-        quickRow.addView(Ui.button(this, "更多", this::openMoreMenu, "更多播放操作"));
-        root.addView(quickRow);
-
+        addAction(quickRow, "歌词", this::openLyricsPanel);
+        queueButton = addAction(quickRow, "队列", this::openQueuePanel);
+        addAction(quickRow, "音效", this::openSoundPanel);
+        page.addView(quickRow);
+        Ui.gap(page, 4);
         LinearLayout modes = Ui.row(this);
-        shuffleView = Ui.button(this, "随机：关", this::toggleShuffle, "随机播放");
-        repeatView = Ui.button(this, "循环：关", this::toggleRepeat, "循环模式");
-        modes.addView(shuffleView); modes.addView(repeatView); // v2.2：倍速移入「更多」
-        root.addView(modes);
+        shuffleView = addAction(modes, "", this::toggleShuffle);
+        repeatView = addAction(modes, "", this::toggleRepeat);
+        page.addView(modes);
+        Ui.gap(page, 6);
 
-        // v2.2：睡眠仅保留常驻状态行（文案由 setSleep/cancelSleep/sleepTicker 原样更新），三按钮移入「更多」。
+        addButton = Ui.primary(this, "＋ 添加音频", this::pickAudio);
+        page.addView(addButton, new LinearLayout.LayoutParams(-1, -2));
         sleepView = Ui.text(this, "睡眠：关", 12, Ui.MUTED);
-        root.addView(sleepView);
-        Ui.gap(root, 12);
+        sleepView.setPadding(0, Ui.dp(this, 4), 0, 0);
+        page.addView(sleepView);
+        mediaKeyHint = Ui.text(this, "", 12, Ui.MUTED);
+        mediaKeyHint.setVisibility(View.GONE);
+        page.addView(mediaKeyHint);
 
         spectrumView = new SpectrumView(this);
         spectrumView.setContentDescription("实时频谱");
         spectrumView.setVisibility(spectrumOn ? View.VISIBLE : View.GONE);
         spectrumVisible = spectrumOn;
-        root.addView(spectrumView, new LinearLayout.LayoutParams(-1, Ui.dp(this, 96)));
+        page.addView(spectrumView, new LinearLayout.LayoutParams(-1, Ui.dp(this, 96)));
+        resetTrackUi();
+        updateQueueButtonLabel();
+        updateModeLabels();
+    }
+
+    private GradientDrawable audioShape(int color, int radius) {
+        return Ui.shape(color, radius, this);
+    }
+
+    private RippleDrawable audioRipple(int color, int radius) {
+        return new RippleDrawable(ColorStateList.valueOf(0x24000000), audioShape(color, radius), null);
+    }
+
+    private Button iconButton(String icon, String description, Runnable action) {
+        Button button = Ui.button(this, icon, action, description);
+        button.setTextSize(24);
+        button.setPadding(0, 0, 0, 0);
+        button.setBackground(audioRipple(SURFACE, 28));
+        button.setMinimumWidth(Ui.dp(this, 48));
+        button.setMinimumHeight(Ui.dp(this, 48));
+        return button;
+    }
+
+    private Button addAction(LinearLayout row, String label, Runnable action) {
+        Button button = Ui.button(this, label, action);
+        button.setMinimumHeight(Ui.dp(this, 48));
+        button.setPadding(Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
+        button.setBackground(audioRipple(SURFACE, 12));
+        LinearLayout.LayoutParams params = Ui.weight();
+        if (row.getChildCount() > 0) params.setMarginStart(Ui.dp(this, 6));
+        row.addView(button, params);
+        return button;
+    }
+
+    /** 用原绘唱片占位；只有音频内确有封面时才替换中心图案。 */
+    private static final class RecordArtwork extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private final Rect coverBounds = new Rect();
+        private final android.graphics.Path coverClip = new android.graphics.Path();
+        private Bitmap coverImage;
+
+        RecordArtwork(Context context) { super(context); }
+
+        void showCover(byte[] bytes) {
+            coverImage = null;
+            if (bytes != null && bytes.length > 0) {
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inJustDecodeBounds = true;
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+                if (options.outWidth > 0 && options.outHeight > 0) {
+                    options.inSampleSize = 1;
+                    while (Math.max(options.outWidth, options.outHeight) / options.inSampleSize > 512) {
+                        options.inSampleSize *= 2;
+                    }
+                    options.inJustDecodeBounds = false;
+                    coverImage = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+                }
+            }
+            invalidate();
+        }
+
+        @Override protected void onDraw(Canvas c) {
+            super.onDraw(c);
+            float x = getWidth() / 2f, y = getHeight() / 2f;
+            float radius = Math.min(x, y) * .90f;
+            paint.setColor(0x1A263D35);
+            c.drawCircle(x, y + radius * .055f, radius * 1.035f, paint);
+            paint.setColor(0xFF283933);
+            c.drawCircle(x, y, radius, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Ui.dp(getContext(), 1));
+            paint.setColor(0xFF475951);
+            for (int i = 0; i < 6; i++) c.drawCircle(x, y, radius * (.52f + i * .078f), paint);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0xFF7DA491);
+            c.drawCircle(x, y, radius * .43f, paint);
+            if (coverImage != null) {
+                float scale = radius * .86f / Math.min(coverImage.getWidth(), coverImage.getHeight());
+                int halfW = Math.round(coverImage.getWidth() * scale / 2f);
+                int halfH = Math.round(coverImage.getHeight() * scale / 2f);
+                coverBounds.set(Math.round(x) - halfW, Math.round(y) - halfH,
+                        Math.round(x) + halfW, Math.round(y) + halfH);
+                int save = c.save();
+                coverClip.rewind();
+                coverClip.addCircle(x, y, radius * .43f, android.graphics.Path.Direction.CW);
+                c.clipPath(coverClip);
+                c.drawBitmap(coverImage, null, coverBounds, paint);
+                c.restoreToCount(save);
+            } else {
+                paint.setColor(0xFFF1F6F1);
+                paint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                paint.setTextAlign(Paint.Align.CENTER);
+                paint.setTextSize(radius * .45f);
+                c.drawText("♪", x, y - (paint.ascent() + paint.descent()) / 2f, paint);
+            }
+        }
     }
 
     private void pickAudio() {
@@ -283,7 +461,6 @@ public final class AudioPlayerActivity extends Activity {
     /** 0.43.0：点击倍速按钮按固定档位循环，更新文案、持久化并立即作用于当前 player。 */
     private void cycleSpeed() {
         speed = PlaybackQueue.SPEEDS[PlaybackQueue.nextSpeedIndex(currentSpeedIndex())];
-        if (speedView != null) speedView.setText(speedLabel());
         saveState();
         if (player != null) player.setPlaybackSpeed(speed);
     }
@@ -437,84 +614,136 @@ public final class AudioPlayerActivity extends Activity {
 
     /** 队列按钮 label 随队列长度更新；只读 UI，不改队列顺序、不重建播放器。 */
     private void updateQueueButtonLabel() {
-        if (queueButton != null) queueButton.setText("队列 " + queue.size());
+        if (queueButton != null) queueButton.setText("队列 · " + queue.size());
+        if (addButton != null) addButton.setVisibility(queue.isEmpty() ? View.VISIBLE : View.GONE);
+        updatePlaybackStatus();
     }
 
-    /**
-     * v2.2 歌词查看面板：快照式展示，打开时 setText 一次。不在 ticker 里刷新面板内容，
-     * 因此不抢用户手动滚动位置；Dialog 只 setView/show，不碰播放器。
-     */
+    private void updateModeLabels() {
+        shuffleView.setText("随机：" + (shuffled ? "开" : "关"));
+        repeatView.setText("循环：" + (repeat == Repeat.NONE ? "关" : repeat == Repeat.ONE ? "单曲" : "全部"));
+        shuffleView.setBackground(audioRipple(shuffled ? ACTIVE : SURFACE, 12));
+        repeatView.setBackground(audioRipple(repeat != Repeat.NONE ? ACTIVE : SURFACE, 12));
+    }
+
+    private void resetTrackUi() {
+        boolean selected = !currentPath().isEmpty();
+        titleView.setText(selected ? displayName(currentPath()) : "未选择音频");
+        subtitleView.setText(selected ? "本地音频文件" : "从设备选择音频文件");
+        displayedMetadata = null;
+        artwork.showCover(null);
+        updateLyrics(0L);
+        seekBar.setMax(1);
+        seekBar.setProgress(0);
+        seekBar.setEnabled(false);
+        elapsedView.setText("00:00");
+        durationView.setText("—");
+        updatePlaybackStatus();
+    }
+
+    private String playbackStatus() {
+        if (playbackError) return "无法播放";
+        if (preparing) return "正在打开";
+        if (player != null && player.isPlaying()) return "正在播放";
+        if (player != null) return "已暂停";
+        if (!currentPath().isEmpty()) return "待播放";
+        return "未播放";
+    }
+
+    /** 只刷新现有会话的 UI；同时覆盖焦点、线控与睡眠导致的播放状态变化。 */
+    private void updatePlaybackStatus() {
+        boolean playing = player != null && player.isPlaying();
+        String action = playing ? "暂停" : playbackError ? "重试播放" : "播放";
+        if (!TextUtils.equals(playButton.getContentDescription(), action)) {
+            playButton.setText(playing ? "Ⅱ" : "▶");
+            playButton.setContentDescription(action);
+        }
+        playButton.setEnabled(!queue.isEmpty() && !preparing);
+        playButton.setAlpha(playButton.isEnabled() ? 1f : .52f);
+        previousButton.setEnabled(!queue.isEmpty());
+        nextButton.setEnabled(!queue.isEmpty());
+        previousButton.setAlpha(previousButton.isEnabled() ? 1f : .52f);
+        nextButton.setAlpha(nextButton.isEnabled() ? 1f : .52f);
+        String state = playbackStatus();
+        if (!TextUtils.equals(stateView.getText(), state)) stateView.setText(state);
+    }
+
+    private void showTrackMetadata(OpenLeafPlayer candidate) {
+        androidx.media3.common.MediaMetadata metadata = candidate.underlying().getMediaMetadata();
+        if (metadata.equals(displayedMetadata)) return;
+        boolean coverChanged = displayedMetadata == null
+                || !Arrays.equals(metadata.artworkData, displayedMetadata.artworkData);
+        displayedMetadata = metadata;
+        titleView.setText(TextUtils.isEmpty(metadata.title) ? displayName(currentPath()) : metadata.title);
+        CharSequence artist = TextUtils.isEmpty(metadata.artist) ? metadata.albumArtist : metadata.artist;
+        subtitleView.setText(TextUtils.isEmpty(artist) ? "本地音频文件" : artist);
+        if (coverChanged) artwork.showCover(metadata.artworkData);
+    }
+
+    /** 歌词快照保持可滚动，定时刷新只更新首屏预览，不扰动面板阅读位置。 */
     private void openLyricsPanel() {
         if (debugLog) android.util.Log.d(TAG, "panel=lyrics action=open");
         ScrollView scroll = new ScrollView(this);
-        TextView content = Ui.text(this, "", 14, Ui.INK);
-        Ui.pad(content, 12);
-        if (lyrics == null || lyrics.isEmpty()) {
-            content.setText("未加载歌词，可在更多→选择歌词导入");
-        } else if (lyrics.get(0).timeMs < 0) {
-            // 纯文本歌词（TXT）：无时间轴，如实标注不支持按播放位置定位，全量展示。
-            StringBuilder sb = new StringBuilder();
-            for (Lyrics.Line line : lyrics) {
-                if (sb.length() > 0) sb.append('\n');
-                sb.append(line.text);
-            }
-            sb.append("\n\n（纯文本歌词无时间轴，不支持按播放位置定位）");
-            content.setText(sb.toString());
+        TextView content = Ui.text(this, "", 15, Ui.INK);
+        Ui.pad(content, 16);
+        content.setLineSpacing(Ui.dp(this, 5), 1f);
+        if (lyrics.isEmpty()) {
+            content.setText("暂无歌词。可从设备选择 .lrc、.srt 或 .txt 文件。");
         } else {
-            // 带时间戳：用当前播放位置找最近一句（与常驻 lyricView 同一口径），置顶展示并标注。
-            long position = player == null ? 0L : player.position();
-            int current = 0;
+            boolean timed = lyrics.get(0).timeMs >= 0;
+            int activeLine = timed ? lyricIndex(player == null ? 0L : player.position()) : -1;
+            StringBuilder text = new StringBuilder();
+            text.append(timed ? "播放位置快照" : "纯文本歌词 · 无时间轴").append("\n\n");
             for (int i = 0; i < lyrics.size(); i++) {
-                if (lyrics.get(i).timeMs <= position) current = i; else break;
+                Lyrics.Line line = lyrics.get(i);
+                if (timed) {
+                    text.append(i == activeLine ? "▶ " : "    ");
+                    text.append(time(line.timeMs)).append("  ");
+                }
+                text.append(line.text).append('\n');
             }
-            StringBuilder sb = new StringBuilder();
-            sb.append("当前句：").append(lyrics.get(current).text).append("\n\n");
-            for (int i = 0; i < lyrics.size(); i++) {
-                if (sb.length() > 0) sb.append('\n');
-                sb.append(i == current ? "▶ " : "   ").append(lyrics.get(i).text);
-            }
-            content.setText(sb.toString());
+            content.setText(text);
         }
         scroll.addView(content);
         new AlertDialog.Builder(this).setTitle("歌词").setView(scroll)
+                .setPositiveButton(lyrics.isEmpty() ? "导入歌词" : "更换歌词", (d, w) -> pickLyrics())
                 .setNegativeButton("关闭", null)
                 .setOnDismissListener(d -> {
                     if (debugLog) android.util.Log.d(TAG, "panel=lyrics action=close");
                 }).show();
     }
 
-    /**
-     * v2.2 队列查看面板：只读展示「正在播放 / 接下来」，不改队列顺序、不重建播放器。
-     * 空队列提供「添加音频」引导到 pickAudio；队列项不响应点击（插队仍走「下一首播放」）。
-     */
+    /** 会话面板展示实际播放顺序，不将文件队列伪装成独立媒体库。 */
     private void openQueuePanel() {
         if (debugLog) android.util.Log.d(TAG, "panel=queue action=open");
         ScrollView scroll = new ScrollView(this);
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 16);
         if (queue.isEmpty()) {
-            panel.addView(Ui.text(this, "队列为空，可添加音频", 13, Ui.MUTED));
-            panel.addView(Ui.button(this, "＋ 添加音频", this::pickAudio, "添加音频文件"));
+            panel.addView(Ui.text(this, "队列为空。添加设备上的音频文件后，可以在此查看播放顺序。", 14, Ui.MUTED));
         } else {
-            panel.addView(Ui.text(this, "正在播放", 11, Ui.MUTED));
-            String playing = currentIndex >= 0 && currentIndex < queue.size()
-                    ? displayName(queue.get(currentIndex)) : "（无）";
-            panel.addView(Ui.text(this, "▶ " + playing, 14, Ui.INK));
-            panel.addView(Ui.text(this, "接下来", 11, Ui.MUTED));
-            if (currentIndex + 1 >= queue.size()) {
-                panel.addView(Ui.text(this, "队列已到末尾", 12, Ui.MUTED));
-            } else {
-                for (int i = currentIndex + 1; i < queue.size(); i++) {
-                    panel.addView(Ui.text(this, (i - currentIndex) + ". " + displayName(queue.get(i)), 13, Ui.INK));
-                }
+            panel.addView(Ui.text(this, "本地播放顺序 · " + queue.size() + " 首", 13, Ui.MUTED));
+            Ui.gap(panel, 8);
+            for (int i = 0; i < queue.size(); i++) {
+                boolean selected = i == currentIndex;
+                String line = (i + 1) + ". " + displayName(queue.get(i));
+                if (selected) line += "\n当前曲目";
+                TextView entry = selected ? Ui.title(this, line, 15) : Ui.text(this, line, 14, Ui.INK);
+                Ui.pad(entry, 10);
+                if (selected) entry.setBackground(audioShape(ACTIVE, 12));
+                panel.addView(entry);
             }
         }
         scroll.addView(panel);
-        new AlertDialog.Builder(this).setTitle("播放队列（" + queue.size() + "）").setView(scroll)
+        AlertDialog.Builder dialog = new AlertDialog.Builder(this)
+                .setTitle("播放队列").setView(scroll)
+                .setPositiveButton("添加音频", (d, w) -> pickAudio())
                 .setNegativeButton("关闭", null)
                 .setOnDismissListener(d -> {
                     if (debugLog) android.util.Log.d(TAG, "panel=queue action=close");
-                }).show();
+                });
+        if (!currentPath().isEmpty()) dialog.setNeutralButton("下一首播放", (d, w) -> pickPlayNext());
+        dialog.show();
     }
 
     /** 音效面板开关行：点击在开/关间切换并回调。 */
@@ -548,7 +777,7 @@ public final class AudioPlayerActivity extends Activity {
         if (result != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         if (request == 1002) {
-            String name = lyricsDisplayName(uri);
+            String name = documentDisplayName(uri);
             if (!supportedLyrics(name)) {
                 // 不支持格式：提示并保留当前已加载歌词，不覆盖 customLyricsUri。
                 Toast.makeText(this, "不识别该歌词格式（支持 .lrc / .srt / .txt）", Toast.LENGTH_LONG).show();
@@ -618,9 +847,12 @@ public final class AudioPlayerActivity extends Activity {
     }
 
     private void togglePlay() {
-        if (player == null) { playCurrent(); return; }
-        if (player.isPlaying()) { pausePlayback(); }
+        if (player == null || playbackError) {
+            if (currentIndex < 0 && !queue.isEmpty()) { currentIndex = 0; saveState(); }
+            playCurrent();
+        } else if (player.isPlaying()) { pausePlayback(); }
         else { sleepFired = false; requestFocus(); player.play(); }
+        updatePlaybackStatus();
     }
 
     private void playCurrent() {
@@ -629,9 +861,12 @@ public final class AudioPlayerActivity extends Activity {
         // 换曲目后旧计时段作废，避免把上一首的时长记到这一首名下
         audioStatsMark = 0;
         audioStatsSegment = 0;
-        if (currentIndex < 0 || currentIndex >= queue.size()) return;
         final String path = currentPath();
-        titleView.setText(new File(displayName(path)).getName());
+        preparing = !path.isEmpty();
+        playbackError = false;
+        lyrics = Collections.emptyList();
+        resetTrackUi();
+        if (path.isEmpty()) return;
         try {
             // 阶段 2-A：仅当任一音效开启时才挂处理器链；默认全关走原构造，零回归
             AudioProcessorChain chain = (eqOn || clipOn || spectrumOn) ? new AudioProcessorChain() : null;
@@ -647,12 +882,20 @@ public final class AudioPlayerActivity extends Activity {
                     candidate.startFadeIn();
                     candidate.play();
                     loadLyrics(path);
+                    preparing = false;
+                    showTrackMetadata(candidate);
+                    updateLyrics(candidate.position());
+                    updateProgress(candidate.position());
+                    updatePlaybackStatus();
                 }
                 @Override public void onCompletion() {
                     if (!isDestroyed() && player == candidate) onTrackEnd();
                 }
                 @Override public void onError(String reason) {
-                    if (!isDestroyed()) Toast.makeText(AudioPlayerActivity.this, "无法播放该音频", Toast.LENGTH_SHORT).show();
+                    if (!isDestroyed() && player == candidate) {
+                        showPlaybackError();
+                        Toast.makeText(AudioPlayerActivity.this, "无法播放该音频", Toast.LENGTH_SHORT).show();
+                    }
                 }
                 @Override public void onTracksChanged() { }
             });
@@ -661,8 +904,16 @@ public final class AudioPlayerActivity extends Activity {
             candidate.setPlaybackSpeed(speed); // 0.43.0：播放器每曲重建，倍速必须重施
             lastPosition = 0;
         } catch (Exception error) {
+            showPlaybackError();
             Toast.makeText(this, "打开失败：" + error.getMessage(), Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void showPlaybackError() {
+        preparing = false;
+        playbackError = true;
+        seekBar.setEnabled(false);
+        updatePlaybackStatus();
     }
 
     private void onTrackEnd() {
@@ -702,13 +953,14 @@ public final class AudioPlayerActivity extends Activity {
             queue.clear(); queue.addAll(originalOrder);
             currentIndex = current != null ? queue.indexOf(current) : -1;
         }
-        shuffleView.setText("随机：" + (shuffled ? "开" : "关"));
+        updateModeLabels();
+        updatePlaybackStatus();
         saveState();
     }
 
     private void toggleRepeat() {
         repeat = repeat == Repeat.NONE ? Repeat.ONE : repeat == Repeat.ONE ? Repeat.ALL : Repeat.NONE;
-        repeatView.setText("循环：" + (repeat == Repeat.NONE ? "关" : repeat == Repeat.ONE ? "单曲" : "全部"));
+        updateModeLabels();
         saveState();
     }
 
@@ -776,7 +1028,7 @@ public final class AudioPlayerActivity extends Activity {
     }
 
     /** 优先读 SAF DISPLAY_NAME，读不到回退 Uri 末段；用于扩展名白名单判断。 */
-    private String lyricsDisplayName(Uri uri) {
+    private String documentDisplayName(Uri uri) {
         Cursor cursor = null;
         try {
             cursor = getContentResolver().query(uri,
@@ -803,29 +1055,39 @@ public final class AudioPlayerActivity extends Activity {
         return lower.endsWith(".lrc") || lower.endsWith(".srt") || lower.endsWith(".txt");
     }
 
-    private void updateLyrics(long position) {
-        if (lyrics == null || lyrics.isEmpty()) return;
-        if (lyrics.get(0).timeMs < 0) {
-            // 静态 TXT：一次显示全部文本，不做时间轴推进。
-            StringBuilder text = new StringBuilder();
-            for (Lyrics.Line line : lyrics) {
-                if (text.length() > 0) text.append('\n');
-                text.append(line.text);
-            }
-            lyricView.setText(text.toString());
-            return;
-        }
+    private int lyricIndex(long position) {
         int index = -1;
-        for (int i = 0; i < lyrics.size(); i++) if (lyrics.get(i).timeMs <= position) index = i; else break;
-        if (index >= 0) lyricView.setText(lyrics.get(index).text);
+        for (int i = 0; i < lyrics.size() && lyrics.get(i).timeMs <= position; i++) index = i;
+        return index;
+    }
+
+    private void updateLyrics(long position) {
+        String text;
+        if (lyrics.isEmpty()) text = "未加载歌词";
+        else if (lyrics.get(0).timeMs < 0) text = lyrics.get(0).text; // 全文见歌词面板
+        else {
+            int index = lyricIndex(position);
+            text = index < 0 ? "等待歌词开始" : lyrics.get(index).text;
+        }
+        if (!TextUtils.equals(lyricView.getText(), text)) lyricView.setText(text);
+    }
+
+    private void seekFromControl(int position) {
+        if (player == null || !seekBar.isEnabled()) return;
+        player.seekTo(position);
+        lastPosition = position;
+        elapsedView.setText(time(position));
+        updateLyrics(position);
     }
 
     private void updateProgress(long position) {
-        if (seeking || player == null) return;
-        int duration = (int) player.duration();
-        seekBar.setMax(Math.max(1, duration));
-        seekBar.setProgress((int) position);
-        positionView.setText(time(position) + " / " + time(duration));
+        if (seeking || player == null || playbackError) return;
+        long duration = player.duration();
+        seekBar.setEnabled(duration > 0);
+        seekBar.setMax((int) Math.max(1, Math.min(Integer.MAX_VALUE, duration)));
+        seekBar.setProgress((int) Math.max(0, Math.min(Integer.MAX_VALUE, position)));
+        elapsedView.setText(time(position));
+        durationView.setText(duration > 0 ? time(duration) : "—");
     }
 
     private static String time(long millis) {
@@ -968,8 +1230,18 @@ public final class AudioPlayerActivity extends Activity {
         return currentIndex >= 0 && currentIndex < queue.size() ? queue.get(currentIndex) : "";
     }
 
-    private static String displayName(String path) {
-        int slash = path.lastIndexOf('/');
-        return slash >= 0 ? path.substring(slash + 1) : path;
+    private String displayName(String path) {
+        String cached = displayNames.get(path);
+        if (cached != null) return cached;
+        Uri uri = Uri.parse(path);
+        String name = "content".equalsIgnoreCase(uri.getScheme())
+                ? documentDisplayName(uri) : uri.getLastPathSegment();
+        if (!TextUtils.isEmpty(name)) {
+            int slash = name.lastIndexOf('/');
+            if (slash >= 0) name = name.substring(slash + 1);
+        }
+        if (TextUtils.isEmpty(name)) name = "本地音频文件";
+        displayNames.put(path, name);
+        return name;
     }
 }
