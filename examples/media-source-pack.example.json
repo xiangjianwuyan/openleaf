@@ -1,0 +1,23 @@
+{
+  "format": "openleaf-media-sources",
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "id": "reference-comics",
+      "name": "我的漫画适配服务（替换域名）",
+      "kind": "comics",
+      "baseUrl": "https://adapter.example:18765/",
+      "search": "comics/search?q={query}&page={page}",
+      "detail": "comics/detail?id={id}",
+      "pages": "comics/pages?id={id}"
+    },
+    {
+      "id": "reference-music",
+      "name": "我的音乐适配服务（替换域名）",
+      "kind": "music",
+      "baseUrl": "https://adapter.example:18765/",
+      "search": "music/search?q={query}&page={page}",
+      "stream": "music/stream?id={id}"
+    }
+  ]
+}

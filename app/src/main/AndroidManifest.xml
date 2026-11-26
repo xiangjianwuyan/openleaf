@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 仅用于判断当前网络是否计费，以决定是否自动预取（不外传、不采集） -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- 听书在前台服务里持续朗读；Android 14 起必须显式申报媒体播放类型 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 锁屏后 CPU 不休眠；否则「一句讲完推进下一句」的回调会停在中途 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <application android:theme="@style/AppTheme" android:label="青简" android:icon="@drawable/ic_leaf" android:allowBackup="false" android:dataExtractionRules="@xml/data_extraction_rules" android:supportsRtl="true" android:usesCleartextTraffic="false">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".ReaderActivity" android:exported="false" />
+        <activity android:name=".BookSearchActivity" android:exported="false" />
+        <activity android:name=".BookDetailActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".PdfActivity" android:exported="false" />
+        <activity android:name=".WebActivity" android:exported="false" />
+        <activity android:name=".FolderImportActivity" android:exported="false" />
+        <activity android:name=".DeleteBookActivity" android:exported="false" />
+        <activity android:name=".OrganizeBooksActivity" android:exported="false" />
+        <activity android:name=".EpubActivity" android:exported="false" />
+        <activity android:name=".LocalFilesActivity" android:exported="false" />
+        <activity android:name=".LocalTextEditorActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".MediaSourceActivity" android:exported="false" />
+        <activity android:name=".LegadoActivity" android:exported="false" />
+        <activity android:name=".CatalogActivity" android:exported="false" />
+        <activity android:name=".IdeasActivity" android:exported="false" />
+        <activity android:name=".StatsActivity" android:exported="false" />
+        <activity android:name=".AudioPlayerActivity" android:exported="false" />
+        <activity android:name=".TtsActivity" android:exported="false" />
+        <activity android:name=".JobsActivity" android:exported="false" />
+        <activity android:name=".BackupActivity" android:exported="false" />
+        <activity android:name=".ComicActivity" android:exported="false" />
+        <!-- 听书前台服务：离开界面与锁屏后继续朗读，通知栏可控制 -->
+        <service android:name=".TtsPlaybackService" android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+    </application>
+</manifest>

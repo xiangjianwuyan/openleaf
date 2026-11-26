@@ -1,0 +1,61 @@
+name: Android checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Test parser (pure JVM core)
+        run: |
+          mkdir -p core-tests/out
+          # 固定 JDK 17：JDK 27 的 XML 深度限制会让 BookParserTest 深度用例误报失败。
+          javac -encoding UTF-8 -d core-tests/out app/src/main/java/org/openleaf/reader/core/*.java \
+            core-tests/BookParserTest.java core-tests/BookSearchTest.java core-tests/TextChapterHeadingsTest.java \
+            core-tests/EpubTocTest.java core-tests/EpubIllustratedTest.java \
+            core-tests/EpubCfiTest.java core-tests/EpubCfiRenderTest.java
+          java -Xmx512m -cp core-tests/out BookParserTest
+          java -Xmx512m -cp core-tests/out BookSearchTest
+          java -Xmx512m -cp core-tests/out TextChapterHeadingsTest
+          java -Xmx512m -cp core-tests/out EpubTocTest
+          java -Xmx512m -cp core-tests/out EpubIllustratedTest
+          java -Xmx512m -cp core-tests/out EpubCfiTest
+          java -Xmx512m -cp core-tests/out EpubCfiRenderTest
+      - name: Test feature cores
+        run: |
+          mkdir -p core-tests/features
+          # 所有 core 类 + 纯 JVM 特性测试一起编译；依赖 Android 层的测试（如 CatalogProtocolTest）不在此组。
+          javac -encoding UTF-8 -d core-tests/features app/src/main/java/org/openleaf/reader/core/*.java \
+            core-tests/FuzzySearchTest.java core-tests/ReadingHabitTest.java core-tests/SpeechTextTest.java \
+            core-tests/AudioDspTest.java core-tests/OnlineLibraryTest.java core-tests/ComicFlowTest.java \
+            core-tests/ComicSlotsTest.java core-tests/PrefetchFollowTest.java core-tests/AutoReadTest.java \
+            core-tests/TextChapterIndexerTest.java core-tests/OnlineChapterTest.java \
+            core-tests/OnlineReparseTest.java core-tests/SourceRuleVersionTest.java core-tests/BackupManifestTest.java \
+            core-tests/DownloadResumeTest.java core-tests/ReadingLedgerTest.java core-tests/PlaybackQueueTest.java \
+            core-tests/ReadingPaceTest.java core-tests/AudioCapabilityTest.java core-tests/AudioSleepTimerTest.java \
+            core-tests/ThemeResolverTest.java
+          for t in FuzzySearchTest ReadingHabitTest SpeechTextTest AudioDspTest OnlineLibraryTest ComicFlowTest \
+                   ComicSlotsTest PrefetchFollowTest AutoReadTest TextChapterIndexerTest OnlineChapterTest \
+                   OnlineReparseTest SourceRuleVersionTest BackupManifestTest DownloadResumeTest ReadingLedgerTest \
+                   PlaybackQueueTest ReadingPaceTest AudioCapabilityTest AudioSleepTimerTest ThemeResolverTest; do
+            java -Xmx512m -cp core-tests/features "$t" || exit 1
+          done
+      - name: Build and lint
+        run: gradle --no-daemon assembleDebug lintDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openleaf-debug
+          path: app/build/outputs/apk/debug/app-debug.apk

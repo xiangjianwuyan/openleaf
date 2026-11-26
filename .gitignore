@@ -1,0 +1,19 @@
+# Local tools, SDK and credentials
+.tools/
+.gradle/
+.idea/
+local.properties
+*.iml
+*.jks
+*.keystore
+keystore.properties
+# Generated output
+**/build/
+core-tests/out/
+core-tests/*build*/
+core-tests/build*/
+core-tests/features/
+**/*.class
+*.apk
+*.aab
+.DS_Store

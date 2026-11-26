@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <provider android:name=".BulkFixtureProvider" android:authorities="${applicationId}.debugfixtures" android:exported="true" android:permission="android.permission.MANAGE_DOCUMENTS" android:grantUriPermissions="true">
+            <intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER" /></intent-filter>
+        </provider>
+    </application>
+    <instrumentation android:name=".LegadoInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name=".MediaSourceInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name=".BulkImportInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name=".PlaybackInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name=".StatsInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name=".PdfInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name=".BackupRoundtripInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name=".OnlineUpdateInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+</manifest>

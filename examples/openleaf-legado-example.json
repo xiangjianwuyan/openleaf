@@ -1,0 +1,10 @@
+{
+  "bookSourceName": "示例文字书源",
+  "bookSourceUrl": "https://books.example/",
+  "bookSourceType": 0,
+  "searchUrl": "/find?q={{key}}&page={{page}}",
+  "ruleSearch": {"bookList":"@css:.book", "name":"a@text", "bookUrl":"a@href"},
+  "ruleBookInfo": {"intro":".intro@text", "tocUrl":"a.toc@href"},
+  "ruleToc": {"chapterList":"a.chapter", "chapterName":"text", "chapterUrl":"@href", "nextTocUrl":"a.next@href"},
+  "ruleContent": {"content":"article@text"}
+}

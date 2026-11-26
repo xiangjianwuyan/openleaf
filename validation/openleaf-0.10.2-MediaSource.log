@@ -1,0 +1,17 @@
+﻿
+PASS: 14 media source checks
+PASS music/comic source pack roundtrip
+PASS search request encodes query and IDs without injection
+PASS pagination changes HTTP request and reads empty last page
+PASS comic search to detail to chapter pages pipeline
+PASS music search to stream resolution pipeline
+PASS cancelled request never reaches fixture service
+PASS transport errors propagate for UI retry
+PASS oversized JSON rejected even with custom transport
+PASS API templates cannot escape configured origin
+PASS HTTP and script image URLs rejected
+PASS invalid media URL rejected after stream resolution
+PASS unsupported scripts and duplicate IDs rejected before import
+PASS result and chapter limits enforced
+PASS player local PCM prepare/pause/seek/release
+

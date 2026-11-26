@@ -1,0 +1,105 @@
+﻿PASS recursive formats, case, duplicate document IDs and directory cycle
+PASS unreadable subdirectory preserves accessible results
+PASS 1050 scan candidates exceed previous 20-file limit
+PASS candidate limit is explicit rather than silently truncated
+PASS directory depth limit terminates safely
+PASS cancel during scan preserves found candidates
+PASS legacy JSON migration preserves IDs and reading progress
+PASS legacy AtomicFile backup-only migration
+PASS malformed legacy index is rejected
+PASS large-file bounded copy/hash and progress callbacks
+PASS same content different filenames is skipped without resetting progress
+PASS PDF import callback phases and duplicate short path
+PASS known-size oversized PDF rejected before copy
+PASS cancel and invalid imports leave no book or copied file
+PASS 1050 unique files import once and repeat imports are skipped
+PASS nested folder archive and direct shelf browsing
+PASS same content in two folders shares book and progress
+PASS same labels from different source trees remain separate
+PASS database v1 upgrade preserves books and progress as unclassified
+PASS folder paths reject parent traversal
+PASS cancel and removal keep folder membership consistent
+PASS database v2 upgrade preserves existing folder associations
+PASS copy-only deletion leaves source document intact
+PASS original deletion succeeds before removing library copy
+PASS changed or wrong source is rejected without deleting books
+PASS provider deletion failure preserves library and source record
+PASS selected duplicate source deletion preserves unselected originals
+PASS old books can attach verified source without resetting progress
+PASS cancelled original deletion leaves original and library intact
+PASS manual nested folder creation and naming rules
+PASS renamed source labels survive rescanning
+PASS batch archive and move preserve other memberships and progress
+PASS global move replaces memberships without copying books
+PASS unfile only removes selected folder associations
+PASS deleting folder tree preserves books, sources and reading progress
+PASS invalid batch operations roll back all membership changes
+PASS database v3 upgrade preserves all records for manual organization
+PASS tagged book package integrity and bounds
+PASS tagged book import and transactional merge
+PASS metadata defaults and complete save round trip
+PASS invalid metadata and failed tag writes roll back title and tags
+PASS metadata preserves classification unless explicitly replaced or unclassified
+PASS metadata accepts private covers and rejects invalid cover references
+PASS database v5 to v8 metadata upgrade preserves existing records
+PASS review Unicode limits, clear and atomic metadata rollback
+PASS review package import, duplicate conflict and tag rollback
+PASS database v6 upgrade preserves metadata and creates empty reviews
+PASS reference import reopens source without permanent copies and removal preserves source
+PASS changed and missing references fail safely and matching source rebinds
+PASS nonseekable source uses bounded lifetime-scoped cache
+PASS database v7 upgrade preserves old copies and reviews
+
+PASS: 51 bulk integration checks
+PASS recursive formats, case, duplicate document IDs and directory cycle (2 ms)
+PASS unreadable subdirectory preserves accessible results (1 ms)
+PASS 1050 scan candidates exceed previous 20-file limit (56 ms)
+PASS candidate limit is explicit rather than silently truncated (121 ms)
+PASS directory depth limit terminates safely (4 ms)
+PASS cancel during scan preserves found candidates (2 ms)
+PASS legacy JSON migration preserves IDs and reading progress (19 ms)
+PASS legacy AtomicFile backup-only migration (8 ms)
+PASS malformed legacy index is rejected (5 ms)
+PASS large-file bounded copy/hash and progress callbacks (1565 ms)
+PASS same content different filenames is skipped without resetting progress (16 ms)
+PASS PDF import callback phases and duplicate short path (6 ms)
+PASS known-size oversized PDF rejected before copy (4 ms)
+PASS cancel and invalid imports leave no book or copied file (4 ms)
+PASS 1050 unique files import once and repeat imports are skipped (997 ms)
+PASS nested folder archive and direct shelf browsing (6 ms)
+PASS same content in two folders shares book and progress (8 ms)
+PASS same labels from different source trees remain separate (40 ms)
+PASS database v1 upgrade preserves books and progress as unclassified (20 ms)
+PASS folder paths reject parent traversal (1 ms)
+PASS cancel and removal keep folder membership consistent (8 ms)
+PASS database v2 upgrade preserves existing folder associations (19 ms)
+PASS copy-only deletion leaves source document intact (12 ms)
+PASS original deletion succeeds before removing library copy (13 ms)
+PASS changed or wrong source is rejected without deleting books (9 ms)
+PASS provider deletion failure preserves library and source record (8 ms)
+PASS selected duplicate source deletion preserves unselected originals (10 ms)
+PASS old books can attach verified source without resetting progress (12 ms)
+PASS cancelled original deletion leaves original and library intact (7 ms)
+PASS manual nested folder creation and naming rules (7 ms)
+PASS renamed source labels survive rescanning (7 ms)
+PASS batch archive and move preserve other memberships and progress (13 ms)
+PASS global move replaces memberships without copying books (8 ms)
+PASS unfile only removes selected folder associations (7 ms)
+PASS deleting folder tree preserves books, sources and reading progress (9 ms)
+PASS invalid batch operations roll back all membership changes (11 ms)
+PASS database v3 upgrade preserves all records for manual organization (27 ms)
+PASS tagged book package integrity and bounds (223 ms)
+PASS tagged book import and transactional merge (10 ms)
+PASS metadata defaults and complete save round trip (6 ms)
+PASS invalid metadata and failed tag writes roll back title and tags (8 ms)
+PASS metadata preserves classification unless explicitly replaced or unclassified (7 ms)
+PASS metadata accepts private covers and rejects invalid cover references (13 ms)
+PASS database v5 to v8 metadata upgrade preserves existing records (19 ms)
+PASS review Unicode limits, clear and atomic metadata rollback (41 ms)
+PASS review package import, duplicate conflict and tag rollback (12 ms)
+PASS database v6 upgrade preserves metadata and creates empty reviews (11 ms)
+PASS reference import reopens source without permanent copies and removal preserves source (5 ms)
+PASS changed and missing references fail safely and matching source rebinds (10 ms)
+PASS nonseekable source uses bounded lifetime-scoped cache (7 ms)
+PASS database v7 upgrade preserves old copies and reviews (12 ms)
+

@@ -1,0 +1,16 @@
+libmobi v0.12 (commit 85dcfe803fc2a21020ddcf15c3eb66b93d388add)
+Copyright (c) 2014 Bartek Fabiszewski <http://www.fabiszewski.net>
+
+Licensed under the GNU Lesser General Public License, version 3 or
+(at your option) any later version (LGPL-3.0-or-later).
+
+Upstream source: https://github.com/bfabiszewski/libmobi
+Full license text: THIRD_PARTY_LICENSES/libmobi-LGPL-3.0.txt
+Source offer / rebuild / replacement instructions:
+    THIRD_PARTY_LICENSES/libmobi-SOURCE-OFFER.md
+Pinned versions and rebuild script: app/src/main/cpp/BUILD_VERSIONS.md
+
+These sources are included unmodified in app/src/main/cpp/libmobi/.
+The binary libopenleafmobi.so is dynamically linked via System.loadLibrary.
+libmobi's DRM/decryption capabilities are NOT used by OpenLeaf; encrypted
+documents are rejected before any parsing (enforced in T02).
