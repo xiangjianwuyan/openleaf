@@ -243,7 +243,7 @@ public final class ReaderActivity extends Activity {
                     chapter = Math.max(0, Math.min(chapter, book.size() - 1));
                     int[] mappedOffset = new int[]{pendingOffset};
                     if (savedAnchor != null) {
-                        chapter = progressModel.resolve(savedAnchor, mappedOffset);
+                        chapter = resolveAnchor(savedAnchor, mappedOffset);
                         pendingOffset = mappedOffset[0];
                         pendingBottom = savedAnchor.atEnd;
                         pendingLineFraction = savedAnchor.lineFraction;
@@ -955,6 +955,100 @@ public final class ReaderActivity extends Activity {
         text.requestLayout();
     }
 
+    /**
+     * TXT/MD 的真实源码字符偏移 = 之前各章 charCount 累加。TextChapterIndexer.sourceStart
+     * 实际是「上一章的长度」而非累加值（8 章长度 1697/4397/1117/7397/2897… 时第 5 章
+     * sourceStart=7397，真实累加起点却是 14608），直接拿它做锚点会 resolve 到靠前的章。
+     * 用 charCount 累加得到的偏移对同一份解码文本跨编码、跨分章规则都不变。
+     */
+    private static long cumulativeSourceOffset(LazyChapterBook target, int chapterIndex) {
+        if (target == null || chapterIndex < 0 || chapterIndex >= target.size()) return -1;
+        long sum = 0;
+        for (int i = 0; i < chapterIndex; i++) sum += Math.max(0, target.meta(i).charCount);
+        return sum;
+    }
+
+    private long cumulativeSourceOffset(int chapterIndex) {
+        return cumulativeSourceOffset(book, chapterIndex);
+    }
+
+    /** 锚点源码偏移统一改用累加口径；sourceStart < 0（EPUB 等）维持 -1。 */
+    private long anchorSourceOffset(int chapterIndex, int effective) {
+        long base = cumulativeSourceOffset(chapterIndex);
+        return base < 0 ? -1 : base + Math.max(0, effective);
+    }
+
+    /**
+     * 还原 ReadingAnchor 到当前书的章号/章内偏移。新锚点（累加口径）用源码偏移定位，
+     * 跨编码/跨分章规则都落在同一段正文；老版本与听书服务写下的非累加 sourceStart 锚点
+     * 与新口径不自洽，退回 chapterKey / ordinal + chapterCharOffset。
+     */
+    private int resolveAnchor(ReadingAnchor anchor, int[] offsetOut) {
+        if (anchor == null || book == null || book.size() == 0) {
+            offsetOut[0] = 0;
+            return 0;
+        }
+        int ordinal = Math.max(0, Math.min(anchor.chapterOrdinal, book.size() - 1));
+        long source = anchor.sourceCharOffset;
+        // 老版本/听书服务的锚点：source = section.sourceStart + chapterCharOffset，
+        // 与 chapterKey 的 src:<sourceStart> 相减恰好等于章内偏移；新锚点（真实累加偏移）不自洽。
+        boolean legacySource = false;
+        // 前两章的累加起点与 sourceStart 恰好相同，这类锚点按新口径解析即可
+        if (source >= 0 && source < cumulativeSourceOffset(ordinal)
+                && anchor.chapterKey != null && anchor.chapterKey.startsWith("src:")) {
+            try {
+                long keySource = Long.parseLong(anchor.chapterKey.substring(4));
+                if (source - keySource == anchor.chapterCharOffset) legacySource = true;
+            } catch (NumberFormatException ignored) { /* key 不是数值时按新锚点处理 */ }
+        }
+        if (source >= 0 && !legacySource) {
+            long cum = 0;
+            for (int i = 0; i < book.size(); i++) {
+                long count = Math.max(0, book.meta(i).charCount);
+                if (source == cum + count && anchor.atEnd) {
+                    offsetOut[0] = (int) count;
+                    return i;
+                }
+                if (source >= cum && source < cum + count) {
+                    offsetOut[0] = Math.max(0, Math.min((int) (source - cum), (int) count));
+                    return i;
+                }
+                cum += count;
+            }
+        }
+        if (anchor.chapterKey != null && !anchor.chapterKey.isEmpty()) {
+            // 老锚点的 src:<sourceStart> 可能重复：超长章切分后各片共享同一 key。
+            // 取与 chapterOrdinal 最近的匹配；等距时优先容得下章内偏移的那片，仍平局取较小下标。
+            int best = -1;
+            for (int i = 0; i < book.size(); i++) {
+                if (!anchor.chapterKey.equals(book.meta(i).chapterKey)) continue;
+                if (best < 0) { best = i; continue; }
+                int bestDistance = Math.abs(best - ordinal), distance = Math.abs(i - ordinal);
+                boolean bestFits = book.meta(best).charCount >= anchor.chapterCharOffset;
+                boolean fits = book.meta(i).charCount >= anchor.chapterCharOffset;
+                if (distance < bestDistance
+                        || (distance == bestDistance
+                            && ((fits && !bestFits) || (fits == bestFits && i < best)))) {
+                    best = i;
+                }
+            }
+            if (best >= 0) {
+                offsetOut[0] = Math.max(0, Math.min(anchor.chapterCharOffset, book.meta(best).charCount));
+                return best;
+            }
+        }
+        if (anchor.spineIndex >= 0) {
+            for (int i = 0; i < book.size(); i++) {
+                if (book.meta(i).spineIndex == anchor.spineIndex) {
+                    offsetOut[0] = Math.max(0, Math.min(anchor.chapterCharOffset, book.meta(i).charCount));
+                    return i;
+                }
+            }
+        }
+        offsetOut[0] = Math.max(0, Math.min(anchor.chapterCharOffset, book.meta(ordinal).charCount));
+        return ordinal;
+    }
+
     private void save() {
         if (book == null || text == null || restoring || text.getLayout() == null) return;
         Layout layout = text.getLayout();
@@ -968,7 +1062,7 @@ public final class ReaderActivity extends Activity {
                 && scroll.getScrollY() + scroll.getHeight() >= text.getHeight() - Ui.dp(this, 4);
         LazyChapterBook.Section section=book.meta(chapter);
         int effective=pendingBottom?section.charCount:current;
-        long source=section.sourceStart>=0?section.sourceStart+effective:-1;
+        long source=section.sourceStart>=0?anchorSourceOffset(chapter,effective):-1;
         ReadingAnchor anchor=ReadingAnchor.text(section.chapterKey,chapter,section.spineIndex,
                 source,effective,pendingBottom,pendingLineFraction);
         int percent=progressModel.percent(chapter,current,pendingBottom);
@@ -1135,7 +1229,7 @@ public final class ReaderActivity extends Activity {
         if (mode == null) mode = TextEncoding.Mode.AUTO;
         save();
         final int generation = ++bookReopenGeneration;
-        final int oldSourceStart = book.meta(chapter).sourceStart;
+        final long oldSourceStart = cumulativeSourceOffset(chapter);
         final ReadingAnchor savedAnchor = ReadingAnchor.parse(prefs.getString("anchor_" + id, null));
         final int oldOffset = pendingOffset;
         final boolean oldBottom = pendingBottom;
@@ -1155,12 +1249,12 @@ public final class ReaderActivity extends Activity {
                         progressModel = new ProgressModel(book);
                         int[] mapped = new int[]{oldOffset};
                         if (savedAnchor != null) {
-                            chapter = Math.max(0, progressModel.resolve(savedAnchor, mapped));
+                            chapter = Math.max(0, resolveAnchor(savedAnchor, mapped));
                         } else {
                             chapter = 0;
-                            for (int i = 0; i < book.size() && book.meta(i).sourceStart <= oldSourceStart; i++)
+                            for (int i = 0; i < book.size() && cumulativeSourceOffset(book, i) <= oldSourceStart; i++)
                                 chapter = i;
-                            mapped[0] = Math.max(0, oldSourceStart - book.meta(chapter).sourceStart);
+                            mapped[0] = Math.max(0, (int) (oldSourceStart - cumulativeSourceOffset(book, chapter)));
                         }
                         chapter = Math.max(0, Math.min(chapter, book.size() - 1));
                         pendingOffset = Math.max(0, Math.min(mapped[0], book.meta(chapter).charCount));
@@ -1312,7 +1406,7 @@ public final class ReaderActivity extends Activity {
     private void rebuildIndexAndOutline(ChapterRule rule) {
         if (book == null || currentRecord == null || id == null || isFinishing()) return;
         save();
-        final int oldSourceStart = book.meta(chapter).sourceStart;
+        final long oldSourceStart = cumulativeSourceOffset(chapter);
         final ReadingAnchor savedAnchor = ReadingAnchor.parse(prefs.getString("anchor_" + id, null));
         final int oldOffset = pendingOffset;
         final boolean oldBottom = pendingBottom;
@@ -1331,13 +1425,13 @@ public final class ReaderActivity extends Activity {
                         progressModel = new ProgressModel(book);
                         int[] mapped = new int[]{oldOffset};
                         if (savedAnchor != null) {
-                            chapter = Math.max(0, progressModel.resolve(savedAnchor, mapped));
+                            chapter = Math.max(0, resolveAnchor(savedAnchor, mapped));
                         } else {
                             chapter = 0;
-                            for (int i = 0; i < book.size() && book.meta(i).sourceStart <= oldSourceStart; i++) {
+                            for (int i = 0; i < book.size() && cumulativeSourceOffset(book, i) <= oldSourceStart; i++) {
                                 chapter = i;
                             }
-                            mapped[0] = Math.max(0, oldSourceStart - book.meta(chapter).sourceStart);
+                            mapped[0] = Math.max(0, (int) (oldSourceStart - cumulativeSourceOffset(book, chapter)));
                         }
                         chapter = Math.max(0, Math.min(chapter, book.size() - 1));
                         pendingOffset = Math.max(0, Math.min(mapped[0], book.meta(chapter).charCount));
@@ -2215,7 +2309,7 @@ public final class ReaderActivity extends Activity {
         if(book!=null&&chapter<book.size()){
             LazyChapterBook.Section section=book.meta(chapter);
             int effective=pendingBottom?section.charCount:pendingOffset;
-            long source=section.sourceStart>=0?section.sourceStart+effective:-1;
+            long source=section.sourceStart>=0?anchorSourceOffset(chapter,effective):-1;
             state.putString("anchor",ReadingAnchor.text(section.chapterKey,chapter,section.spineIndex,source,
                     effective,pendingBottom,pendingLineFraction).serialize());
         }
@@ -2243,7 +2337,7 @@ public final class ReaderActivity extends Activity {
         ReadingAnchor anchor = ReadingAnchor.parse(prefs.getString("anchor_" + id, null));
         if (anchor == null) return;
         int[] mapped = new int[]{prefs.getInt("offset_" + id, 0)};
-        int target = progressModel.resolve(anchor, mapped);
+        int target = resolveAnchor(anchor, mapped);
         if (target < 0 || target >= book.size()) return;
         // 只有真正重载成功才推进基线；解析失败时留着旧值，下次还能重试
         lastExternalRevision = revision;
