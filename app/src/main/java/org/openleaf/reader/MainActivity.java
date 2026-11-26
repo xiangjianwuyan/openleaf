@@ -1557,9 +1557,15 @@ public final class MainActivity extends Activity {
         Ui.gap(body, 16);
         body.addView(Ui.title(this, "青简 OpenLeaf", 30));
         Ui.gap(body, 6);
-        body.addView(Ui.text(this, "0.42.0  /  开发版", 14, Ui.MUTED));
+        String buildLabel = "开发版";
+        try {
+            String version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            if (version != null && !version.isEmpty()) buildLabel = version + "  /  " + buildLabel;
+        } catch (android.content.pm.PackageManager.NameNotFoundException ignored) { }
+        body.addView(Ui.text(this, buildLabel, 14, Ui.MUTED));
         Ui.gap(body, 16);
         body.addView(Ui.button(this, "第三方许可与声明", this::showThirdPartyLicenses,"查看第三方许可与声明"));
+        body.addView(Ui.button(this, "应用插件", () -> startActivity(new Intent(this, PluginActivity.class)), "打开应用插件管理"));
         body.addView(Ui.button(this, "书库备份与恢复", () -> startActivity(new Intent(this, BackupActivity.class)),"备份与恢复书库"));
         Ui.gap(body, 24);
         body.addView(Ui.text(this, "让每一本书，都有安静的一页。", 20, Ui.GREEN));

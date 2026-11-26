@@ -115,6 +115,8 @@ public final class ReaderActivity extends Activity {
     }
     private ReadingStatsStore statsStore;
     private BookStore.Book currentRecord;
+    private android.net.Uri displayedSource;
+    private String displayedSourceSha;
     // 在线书逐章缓存：从骨架 txt 打开，正文按需下载到 chapter_cache
     private OnlineChapterStore onlineChapters;
     private OnlineChapterFetcher onlineFetcher;
@@ -138,19 +140,37 @@ public final class ReaderActivity extends Activity {
     private final Handler autoHandler = new Handler(Looper.getMainLooper());
     private final Runnable autoTurnTask = new Runnable() {
         @Override public void run() {
-            if (autoTurnIndex <= 0 || book == null || restoring || isFinishing() || isDestroyed()) return;
-            commitReadingSegment();
-            scroll.smoothScrollBy(0, Math.max(120, scroll.getHeight() - Ui.dp(ReaderActivity.this, 48)));
+            if (autoTurnIndex <= 0 || book == null || isFinishing() || isDestroyed()) return;
+            if (!restoring && !readerSelectionActive && !readerDialogHasFocus()) {
+                commitReadingSegment();
+                if (horizontalPages) {
+                    turnPage(1);
+                    if (readerPages != null && chapter == book.size() - 1
+                            && pageIndex == readerPages.count() - 1) return;
+                } else scroll.smoothScrollBy(0, Math.max(120, scroll.getHeight() - Ui.dp(ReaderActivity.this, 48)));
+            }
+            autoHandler.removeCallbacks(this);
             autoHandler.postDelayed(this, AUTO_TURN_INTERVALS[autoTurnIndex]);
         }
     };
     private boolean volumeKeysEnabled;
+    private boolean readerSelectionActive;
+
+    private boolean readerDialogHasFocus() {
+        return !hasWindowFocus();
+    }
     private String pendingExportFormat = "json";
     private float pendingLineFraction;
     private boolean restoring, pendingBottom;
     private int layoutGeneration;
     private LinearLayout root, toolbar, footer;
-    private ScrollView scroll;
+    private ReaderPagingScroll scroll;
+    private android.widget.FrameLayout scrollContent;
+    private Button previousRead, nextRead;
+    private ReaderPaging readerPages;
+    private boolean horizontalPages;
+    private int pageMotion, pageIndex, pageAnchor, enterPageDirection;
+    private static final String[] PAGE_MOTIONS = {"无动画", "平移", "淡化"};
     /** 阶段 4 精修： immersive 阅读（向下滚动隐藏工具栏/底栏，停止或上滑恢复），借鉴 baca. 形态。 */
     private boolean immersiveEnabled=false;
     private int lastScrollY=0;
@@ -193,6 +213,7 @@ public final class ReaderActivity extends Activity {
         onlineChapters = new OnlineChapterStore(this);
         onlineFetcher = new OnlineChapterFetcher(this);
         volumeKeysEnabled = prefs.getBoolean("volumeKeys", false);
+        pageMotion = Math.max(0, Math.min(PAGE_MOTIONS.length - 1, prefs.getInt("readerPageMotion", 1)));
         autoTurnIndex = Math.max(0, Math.min(AUTO_TURN_INTERVALS.length - 1, prefs.getInt("autoTurn", 0)));
         ReadingAnchor anchor = ReadingAnchor.parse(prefs.getString("anchor_" + id, null));
         chapter = prefs.getInt("chapter_" + id, 0);
@@ -248,6 +269,8 @@ public final class ReaderActivity extends Activity {
                     // 检查书源规则是否更新（不阻塞开书，结果稍后在主线程提示）
                     sourceCheck = new SourceUpdateChecker(this).check(binding);
                 }
+                final android.net.Uri sourceAtOpen = store.sourceUri(record);
+                final String sourceShaAtOpen = sourceAtOpen == null ? null : store.storedHash(id);
                 try (BookAccess access = store.open(record)) {
                 java.io.File file = access.file;
                 // P1-3：按书读取编码覆盖（默认 AUTO→null，走 0.27.0 原自动检测）
@@ -270,6 +293,8 @@ public final class ReaderActivity extends Activity {
                 runOnUiThread(() -> {
                     if (isDestroyed()) { parsed.close(); return; }
                     book = parsed;
+                    displayedSource = sourceAtOpen;
+                    displayedSourceSha = sourceShaAtOpen;
                     progressModel = new ProgressModel(book);
                     chapter = Math.max(0, Math.min(chapter, book.size() - 1));
                     int[] mappedOffset = new int[]{pendingOffset};
@@ -367,13 +392,13 @@ public final class ReaderActivity extends Activity {
         title.setMaxLines(1);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         toolbar.addView(title, Ui.weight());
-        // v2.1 工具栏收敛：顶部仅保留 返回/书名/排版/听书/更多（目录仍在底栏常驻，一键可达）。
         Button layout = Ui.button(this, "排版", this::openStyleSettings, "排版设置"); toolbar.addView(layout);
-        // 从当前章接着听：交给前台服务，退出阅读页也不会停
-        Button listen = Ui.button(this, "听书", () -> startActivity(new Intent(ReaderActivity.this, TtsActivity.class)
-                .putExtra(TtsPlaybackService.EXTRA_BOOK_ID, id)
-                .putExtra(TtsPlaybackService.EXTRA_CHAPTER, chapter)), "从当前章节开始朗读");
-        toolbar.addView(listen);
+        if (showDirectEdit()) {
+            toolbar.addView(Ui.button(this, "编辑", this::openEditor, "编辑当前文本"));
+        }
+        if (showDirectListen()) {
+            toolbar.addView(Ui.button(this, "听书", this::listenFromCurrentChapter, "从当前章节开始朗读"));
+        }
         Button more = Ui.button(this, "更多", this::openMoreMenu, "更多阅读操作"); toolbar.addView(more);
         root.addView(toolbar);
         chapterLabel = Ui.text(this, "", 13, Ui.MUTED);
@@ -388,17 +413,14 @@ public final class ReaderActivity extends Activity {
         matchActions.addView(Ui.button(this,"结果列表",this::openSearch),Ui.weight());
         matchActions.addView(Ui.button(this,"清除",this::clearSearch),Ui.weight());searchControls.addView(matchActions);
         searchControls.setVisibility(View.GONE);root.addView(searchControls);
-        scroll = new ScrollView(this);
+        horizontalPages = supportsPaging() && prefs.getBoolean("readerHorizontalPages", false);
+        pageIndex = pageAnchor = enterPageDirection = 0;
+        readerPages = null;
+        readerSelectionActive = false;
+        scroll = new ReaderPagingScroll(this, this::turnPage);
         scroll.setFillViewport(true);
-        // 阶段 4 精修：沉浸式滚动隐藏（默认关，开启后才挂钩；上滑或停止 1.2s 自动恢复）
-        scroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> {
-            if (!immersiveEnabled) return;
-            if (y > lastScrollY + 6 && y > Ui.dp(this, 160)) setChromeVisible(false);
-            else if (y < lastScrollY - 6) setChromeVisible(true);
-            lastScrollY = y;
-            chromeHandler.removeCallbacks(showChrome);
-            chromeHandler.postDelayed(showChrome, 1200);
-        });
+        scroll.setPaged(horizontalPages);
+        scroll.setVerticalScrollBarEnabled(!horizontalPages);
         // The book anchor is restored explicitly; do not mix it with view hierarchy state.
         scroll.setSaveEnabled(false);
         text = Ui.text(this, "", fontSize, ThemePalette.presetInk(theme)); // colors() 会再套自定义字色
@@ -406,6 +428,8 @@ public final class ReaderActivity extends Activity {
         text.setTextIsSelectable(true);
         text.setCustomSelectionActionModeCallback(new android.view.ActionMode.Callback() {
             public boolean onCreateActionMode(android.view.ActionMode mode, android.view.Menu menu) {
+                readerSelectionActive = true;
+                scroll.setSelectionActive(true);
                 menu.add(0, 1, 0, "高亮");
                 menu.add(0, 2, 1, "笔记");
                 menu.add(0, 3, 2, "朗读选中"); // 候选 A：选中文本直达系统 TTS
@@ -427,22 +451,36 @@ public final class ReaderActivity extends Activity {
                 }
                 return false;
             }
-            public void onDestroyActionMode(android.view.ActionMode mode) { }
+            public void onDestroyActionMode(android.view.ActionMode mode) {
+                readerSelectionActive = false;
+                scroll.setSelectionActive(false);
+            }
         });
         applyTextStyle();
         int horizontal = Math.max(24, (getResources().getConfiguration().screenWidthDp - 680) / 2);
         text.setPadding(Ui.dp(this, Math.max(horizontal, style.sideMarginDp())),
                 Ui.dp(this, 28), Ui.dp(this, Math.max(horizontal, style.sideMarginDp())), Ui.dp(this, 48));
-        scroll.addView(text, new ScrollView.LayoutParams(-1, -2));
+        scrollContent = new android.widget.FrameLayout(this);
+        scrollContent.addView(text, new android.widget.FrameLayout.LayoutParams(-1, -2));
+        scroll.addView(scrollContent, new ScrollView.LayoutParams(-1, -2));
+        scroll.addOnLayoutChangeListener((view, l, t, r, b, ol, ot, or, ob) -> {
+            if (view != scroll || !horizontalPages || (r - l == or - ol && b - t == ob - ot)) return;
+            syncPageScrollRange();
+            if (!restoring && readerPages != null) {
+                restoring = true;
+                restore(pendingOffset, pendingBottom, pendingLineFraction);
+            }
+        });
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         footer = Ui.row(this);
         Ui.pad(footer, 4);
-        Button previousChapter = Ui.button(this, "上一章", () -> move(-1)); previousChapter.setContentDescription("上一章");
+        previousRead = Ui.button(this, "上一章", () -> turnFromFooter(-1));
         Button tocButton = Ui.button(this, "目录", this::contents); tocButton.setContentDescription("章节目录");
-        Button nextChapter = Ui.button(this, "下一章", () -> move(1)); nextChapter.setContentDescription("下一章");
-        footer.addView(previousChapter, Ui.weight());
+        nextRead = Ui.button(this, "下一章", () -> turnFromFooter(1));
+        footer.addView(previousRead, Ui.weight());
         footer.addView(tocButton, Ui.weight());
-        footer.addView(nextChapter, Ui.weight());
+        footer.addView(nextRead, Ui.weight());
+        refreshPageControls();
         root.addView(footer);
         progress = Ui.text(this, "", 12, Ui.MUTED);
         progress.setGravity(android.view.Gravity.CENTER);
@@ -457,7 +495,16 @@ public final class ReaderActivity extends Activity {
         themeStatus.setVisibility(View.GONE);
         root.addView(themeStatus);
         scroll.setOnScrollChangeListener((v, x, y, ox, oy) -> {
-            if (!restoring) { save(); noteInteraction(); }
+            if (restoring || horizontalPages) return;
+            if (immersiveEnabled) {
+                if (y > lastScrollY + 6 && y > Ui.dp(this, 160)) setChromeVisible(false);
+                else if (y < lastScrollY - 6) setChromeVisible(true);
+                lastScrollY = y;
+                chromeHandler.removeCallbacks(showChrome);
+                chromeHandler.postDelayed(showChrome, 1200);
+            }
+            save();
+            noteInteraction();
         });
         scroll.setOnTouchListener((v, event) -> {
             if (event.getAction() == android.view.MotionEvent.ACTION_DOWN) noteInteraction();
@@ -496,7 +543,19 @@ public final class ReaderActivity extends Activity {
         updateStatusVisibility(); // v2.1 页脚降噪：随配色刷新同步两行调试状态的可见性
     }
 
-    /** v2.1 工具栏收敛：低频操作收进「更多」。标签与动作成对 append，which 即动态索引，不错配。 */
+    private boolean showDirectEdit() { return supportsPaging() && displayedSource != null; }
+
+    private boolean showDirectListen() {
+        return !showDirectEdit() || getResources().getConfiguration().screenWidthDp >= 420;
+    }
+
+    private void listenFromCurrentChapter() {
+        startActivity(new Intent(this, TtsActivity.class)
+                .putExtra(TtsPlaybackService.EXTRA_BOOK_ID, id)
+                .putExtra(TtsPlaybackService.EXTRA_CHAPTER, chapter));
+    }
+
+    /** 低频操作收进「更多」；窄屏优先保留排版与本地编辑。 */
     private void openMoreMenu() {
         final boolean isTxt = "txt".equals(currentRecord != null ? currentRecord.format : "");
         final boolean epubBook = "epub".equals(getIntent().getStringExtra("format"))
@@ -505,7 +564,8 @@ public final class ReaderActivity extends Activity {
         final ArrayList<String> labels = new ArrayList<>();
         final ArrayList<Runnable> actions = new ArrayList<>();
         labels.add("查找"); actions.add(this::openSearch);
-        if (isTxt) { labels.add("编辑"); actions.add(this::openEditor); }
+        if (supportsPaging() && !showDirectEdit()) { labels.add("编辑"); actions.add(this::openEditor); }
+        if (!showDirectListen()) { labels.add("从当前章听书"); actions.add(this::listenFromCurrentChapter); }
         if (epubBook) { labels.add("图文"); actions.add(this::switchIllustrated); }
         labels.add("标注管理"); actions.add(this::showAnnotations);
         if (isTxt) { labels.add("AI 单章摘要"); actions.add(this::openAiPanel); }
@@ -643,28 +703,51 @@ public final class ReaderActivity extends Activity {
     }
 
     private void openEditor() {
-        if (book == null || currentRecord == null || restoring) return;
+        if (book == null || currentRecord == null || restoring || !supportsPaging()) return;
         save();
-        try {
-            final java.util.List<BookStore.Source> sources = new BookStore(this).sources(id);
-            if (sources.isEmpty()) { Toast.makeText(this, "这本书没有登记可编辑的原文件", Toast.LENGTH_SHORT).show(); return; }
-            if (sources.size() == 1) { launchEditor(sources.get(0)); return; }
-            String[] names = new String[sources.size()];
-            for (int i = 0; i < sources.size(); i++) names[i] = sources.get(i).name;
-            new AlertDialog.Builder(this).setTitle("选择要编辑的原文件").setItems(names,
-                    (d, which) -> launchEditor(sources.get(which))).setNegativeButton("取消", null).show();
-        } catch (Exception failure) {
-            Toast.makeText(this, "无法打开编辑：" + failure.getMessage(), Toast.LENGTH_LONG).show();
-        }
+        worker.execute(() -> {
+            try {
+                final List<BookStore.Source> sources = new BookStore(this).sources(id);
+                runOnUiThread(() -> {
+                    if (isDestroyed() || isFinishing() || restoring) return;
+                    if (sources.isEmpty()) {
+                        if (displayedSource != null) launchEditor(new BookStore.Source(displayedSource.toString(), currentRecord.title));
+                        else Toast.makeText(this, "这本书没有登记可编辑的原文件", Toast.LENGTH_SHORT).show();
+                    } else if (sources.size() == 1) launchEditor(sources.get(0));
+                    else {
+                        String[] names = new String[sources.size()];
+                        for (int i = 0; i < sources.size(); i++) names[i] = sources.get(i).name;
+                        new AlertDialog.Builder(this).setTitle("选择要编辑的原文件").setItems(names,
+                                (d, which) -> launchEditor(sources.get(which))).setNegativeButton("取消", null).show();
+                    }
+                });
+            } catch (Exception failure) {
+                runOnUiThread(() -> {
+                    if (!isDestroyed() && !isFinishing())
+                        Toast.makeText(this, "无法打开编辑：" + failure.getMessage(), Toast.LENGTH_LONG).show();
+                });
+            }
+        });
     }
 
     private void launchEditor(BookStore.Source source) {
+        if (book == null || currentRecord == null || restoring) return;
+        save();
         android.net.Uri uri = android.net.Uri.parse(source.uri);
         String lower = source.name == null ? "" : source.name.toLowerCase(java.util.Locale.ROOT);
         String name = lower.endsWith(".txt") || lower.endsWith(".md") || lower.endsWith(".markdown")
                 ? source.name : currentRecord.title + "." + currentRecord.format;
-        startActivityForResult(new Intent(this, LocalTextEditorActivity.class).setData(uri)
-                .putExtra("title", name).putExtra("fromReader", true), REQUEST_EDIT);
+        Intent intent = new Intent(this, LocalTextEditorActivity.class).setData(uri)
+                .putExtra("title", name).putExtra("fromReader", true);
+        if (uri.equals(displayedSource) && displayedSourceSha != null) {
+            // Use the first visible offset even if this viewport reaches the end of the chapter.
+            intent.putExtra("bookId", id)
+                    .putExtra(LocalTextEditorActivity.EXTRA_READING_SOURCE, true)
+                    .putExtra(LocalTextEditorActivity.EXTRA_EXPECTED_SHA256, displayedSourceSha)
+                    .putExtra(LocalTextEditorActivity.EXTRA_SOURCE_OFFSET, anchorSourceOffset(chapter, pendingOffset))
+                    .putExtra(LocalTextEditorActivity.EXTRA_ENCODING, TextEncoding.fromIndex(currentEncodingIndex()).name());
+        }
+        startActivityForResult(intent, REQUEST_EDIT);
     }
 
     private void writeNotes(android.net.Uri target) {
@@ -743,19 +826,19 @@ public final class ReaderActivity extends Activity {
             String sha = data.getStringExtra(LocalTextEditorActivity.EXTRA_EDIT_SHA256);
             String uri = data.getStringExtra(LocalTextEditorActivity.EXTRA_EDIT_URI);
             long size = data.getLongExtra(LocalTextEditorActivity.EXTRA_EDIT_SIZE, 0);
-            if (sha != null && !sha.isEmpty()) {
-                ContentContracts.Revision revision = new ContentContracts.Revision(
-                        uri == null ? "primary" : uri, sha, size, System.currentTimeMillis());
-                ServiceRegistry.of(this).revisions().register(id, uri, revision, uri);
-                String pendingId = data.getStringExtra(LocalTextEditorActivity.EXTRA_EDIT_PENDING_ID);
-                if (pendingId != null) ServiceRegistry.of(this).pendingWrites().acknowledge(pendingId);
-                Toast.makeText(this, "已登记新版本，正在重新载入", Toast.LENGTH_SHORT).show();
+            if (sha == null || sha.isEmpty() || uri == null) {
+                Toast.makeText(this, "原文件已修改，但没有可登记的版本信息", Toast.LENGTH_LONG).show();
+                return;
             }
-            reloadBook();
+            reloadBook(new ContentContracts.Revision(uri, sha, size, System.currentTimeMillis()), uri,
+                    data.getStringExtra(LocalTextEditorActivity.EXTRA_EDIT_PENDING_ID),
+                    data.getLongExtra(LocalTextEditorActivity.EXTRA_RESUME_SOURCE_OFFSET, -1));
         }
     }
 
-    private void reloadBook() {
+    private void reloadBook() { reloadBook(null, null, null, -1); }
+
+    private void reloadBook(ContentContracts.Revision revision, String uri, String pendingId, long resumeSourceOffset) {
         cancelIndexChange();
         cancelRulePreview();
         final int generation = indexGeneration;
@@ -763,20 +846,47 @@ public final class ReaderActivity extends Activity {
             try {
                 BookStore store = new BookStore(this);
                 BookStore.Book record = store.find(id);
+                final android.net.Uri sourceAtOpen = store.sourceUri(record);
+                if (revision != null) {
+                    if (!android.net.Uri.parse(uri).equals(sourceAtOpen))
+                        throw new java.io.IOException("已保存到其他文件，当前阅读来源没有改变");
+                    ServiceRegistry.of(this).revisions().register(id, uri, revision, uri);
+                    if (pendingId != null) ServiceRegistry.of(this).pendingWrites().acknowledge(pendingId);
+                    record = store.find(id);
+                }
+                final BookStore.Book updatedRecord = record;
+                final String shaAtOpen = sourceAtOpen == null ? null : store.storedHash(id);
                 ChapterRule appliedRule = currentRule();
-                try (BookAccess access = store.open(record)) {
+                try (BookAccess access = store.open(updatedRecord)) {
                     final LazyChapterBook fresh = LazyChapterBook.open(
-                            access.file, record.format, getCacheDir(), appliedRule,
+                            access.file, updatedRecord.format, getCacheDir(), appliedRule,
                             currentEncodingOverride(access.file),
                             TextChapterIndexer.DEFAULT_RULE_MATCH_BUDGET_MS);
                     runOnUiThread(() -> {
                         if (isDestroyed() || isFinishing() || generation != indexGeneration) { fresh.close(); return; }
-                        currentRecord = record;
+                        currentRecord = updatedRecord;
+                        displayedSource = sourceAtOpen;
+                        displayedSourceSha = shaAtOpen;
                         if (book != null) book.close();
                         book = fresh;
                         progressModel = new ProgressModel(book);
                         chapter = Math.max(0, Math.min(chapter, book.size() - 1));
                         pendingOffset = Math.max(0, Math.min(pendingOffset, book.meta(chapter).charCount));
+                        if (resumeSourceOffset >= 0 && book.size() > 0) {
+                            // Editor offset is in normalized source text; use the same cumulative coordinates as ReadingAnchor.
+                            long remaining = resumeSourceOffset;
+                            for (int i = 0; i < book.size(); i++) {
+                                int count = book.meta(i).charCount;
+                                if (remaining < count || i + 1 == book.size()) {
+                                    chapter = i;
+                                    pendingOffset = (int) Math.min(remaining, count);
+                                    pendingBottom = false;
+                                    pendingLineFraction = 0;
+                                    break;
+                                }
+                                remaining -= count;
+                            }
+                        }
                         build();
                         showChapter(pendingOffset, pendingBottom, pendingLineFraction);
                         Toast.makeText(this, "文件已更新，正文已重新载入", Toast.LENGTH_SHORT).show();
@@ -968,16 +1078,18 @@ public final class ReaderActivity extends Activity {
         pendingBottom = bottom;
         pendingLineFraction = fraction;
         final int generation = ++layoutGeneration;
-        text.getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+        final TextView restoringText = text;
+        restoringText.getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
             @Override public boolean onPreDraw() {
-                if (isDestroyed() || generation != layoutGeneration) {
-                    if (text.getViewTreeObserver().isAlive())
-                        text.getViewTreeObserver().removeOnPreDrawListener(this);
+                if (isDestroyed() || text != restoringText || generation != layoutGeneration) {
+                    if (restoringText.getViewTreeObserver().isAlive())
+                        restoringText.getViewTreeObserver().removeOnPreDrawListener(this);
                     return true;
                 }
                 Layout layout = text.getLayout();
-                if (layout == null || text.isLayoutRequested()) return true;
-                text.getViewTreeObserver().removeOnPreDrawListener(this);
+                if (layout == null || text.isLayoutRequested() || scroll.getHeight() <= 0
+                        || (horizontalPages && scrollContent.isLayoutRequested())) return true;
+                restoringText.getViewTreeObserver().removeOnPreDrawListener(this);
                 int pos = Math.max(0, Math.min(offset, text.length()));
                 int line = layout.getLineForOffset(pos);
                 int lineHeight = Math.max(1, layout.getLineBottom(line) - layout.getLineTop(line));
@@ -986,9 +1098,24 @@ public final class ReaderActivity extends Activity {
                 // A character anchor cannot encode the exact end-of-chapter viewport.
                 // Keep this separately so progress does not jump back after reopening.
                 if (bottom) y = Math.max(0, text.getHeight() - scroll.getHeight());
-                scroll.scrollTo(0, y);
+                if (horizontalPages) {
+                    int[] bottoms = new int[layout.getLineCount()];
+                    for (int i = 0; i < bottoms.length; i++) bottoms[i] = layout.getLineBottom(i);
+                    readerPages = ReaderPaging.fromLineBottoms(bottoms,
+                            scroll.getHeight() - text.getPaddingTop() - text.getPaddingBottom());
+                    pageIndex = bottom ? readerPages.count() - 1 : readerPages.pageForLine(line);
+                    int first = readerPages.firstLine(pageIndex);
+                    pageAnchor = bottom ? layout.getLineStart(first) : pos;
+                    showPageFrame(layout);
+                    int enterDirection = enterPageDirection;
+                    enterPageDirection = 0;
+                    if (enterDirection != 0) scroll.enter(enterDirection, pageMotion);
+                } else {
+                    enterPageDirection = 0;
+                    scroll.scrollTo(0, y);
+                }
                 scroll.post(() -> {
-                    if (isDestroyed() || generation != layoutGeneration) return;
+                    if (isDestroyed() || text != restoringText || generation != layoutGeneration) return;
                     restoring = false;
                     save();
                 });
@@ -1098,11 +1225,19 @@ public final class ReaderActivity extends Activity {
         int y = Math.max(0, scroll.getScrollY() - text.getPaddingTop());
         int line = layout.getLineForVertical(y);
         int current = layout.getLineStart(line);
+        if (horizontalPages && readerPages == null) return;
+        if (horizontalPages) {
+            // Preserve the raw character within this page across layout changes until a real page turn.
+            current = pageAnchor;
+            pendingLineFraction = 0;
+            pendingBottom = false;
+        } else {
+            pendingLineFraction = Math.max(0, Math.min(1, (y - layout.getLineTop(line))
+                    / (float) Math.max(1, layout.getLineBottom(line) - layout.getLineTop(line))));
+            pendingBottom = text.getHeight() > 0 && scroll.getHeight() > 0
+                    && scroll.getScrollY() + scroll.getHeight() >= text.getHeight() - Ui.dp(this, 4);
+        }
         pendingOffset = current;
-        pendingLineFraction = Math.max(0, Math.min(1, (y - layout.getLineTop(line))
-                / (float) Math.max(1, layout.getLineBottom(line) - layout.getLineTop(line))));
-        pendingBottom = text.getHeight() > 0 && scroll.getHeight() > 0
-                && scroll.getScrollY() + scroll.getHeight() >= text.getHeight() - Ui.dp(this, 4);
         LazyChapterBook.Section section=book.meta(chapter);
         int effective=pendingBottom?section.charCount:current;
         long source=section.sourceStart>=0?anchorSourceOffset(chapter,effective):-1;
@@ -1115,8 +1250,93 @@ public final class ReaderActivity extends Activity {
         if (section.sourceStart >= 0) position.putInt("text_layout_version_" + id, 1);
         position.apply();
         int remainingChars = section.charCount - effective;
-        progress.setText("全书 " + percent + "%  ·  " + fontSize + " 号字"
-                + "  ·  " + ReadingPace.chapterFooterLabel(remainingChars, 400));
+        if (horizontalPages) {
+            progress.setText("本章第 " + (pageIndex + 1) + " / " + readerPages.count() + " 页 · 全书 " + percent + "%");
+        } else {
+            progress.setText("全书 " + percent + "%  ·  " + fontSize + " 号字"
+                    + "  ·  " + ReadingPace.chapterFooterLabel(remainingChars, 400));
+        }
+    }
+
+    private boolean supportsPaging() { return isTextFormat() && !onlineBook; }
+
+    private void syncPageScrollRange() {
+        // Allow the final short page to start at its own line rather than clamping to the previous page.
+        int reserve = horizontalPages ? scroll.getHeight() : 0;
+        if (scrollContent.getPaddingBottom() != reserve) scrollContent.setPadding(0, 0, 0, reserve);
+    }
+
+    private void refreshPageControls() {
+        if (previousRead == null || nextRead == null) return;
+        boolean hasPrevious = chapter > 0 || (readerPages != null && pageIndex > 0);
+        boolean hasNext = book != null && (chapter + 1 < book.size()
+                || (readerPages != null && pageIndex + 1 < readerPages.count()));
+        previousRead.setText(horizontalPages ? "上一页" : "上一章");
+        previousRead.setContentDescription(horizontalPages ? "上一页" : "上一章");
+        nextRead.setText(horizontalPages ? "下一页" : "下一章");
+        nextRead.setContentDescription(horizontalPages ? "下一页" : "下一章");
+        previousRead.setEnabled(!horizontalPages || hasPrevious);
+        nextRead.setEnabled(!horizontalPages || hasNext);
+    }
+
+    private void showPageFrame(Layout layout) {
+        int first = readerPages.firstLine(pageIndex);
+        int end = readerPages.endLine(pageIndex);
+        int top = layout.getLineTop(first);
+        scroll.scrollTo(0, top);
+        int bottom = end == first ? text.getPaddingTop()
+                : text.getPaddingTop() + layout.getLineBottom(end - 1) - top;
+        scroll.frame(bottom, pageIndex > 0 || chapter > 0,
+                pageIndex + 1 < readerPages.count() || chapter + 1 < book.size());
+        refreshPageControls();
+    }
+
+    private void turnFromFooter(int direction) {
+        if (horizontalPages) turnPage(direction);
+        else move(direction);
+    }
+
+    private boolean turnPage(int direction) {
+        if (!horizontalPages || restoring || readerSelectionActive || readerPages == null || book == null)
+            return false;
+        int next = pageIndex + direction;
+        if (next < 0 || next >= readerPages.count()) {
+            int target = chapter + direction;
+            if (target < 0 || target >= book.size()) return false;
+            save();
+            noteInteraction();
+            chapter = target;
+            enterPageDirection = direction;
+            showChapter(0, direction < 0, 0);
+        } else {
+            Layout layout = text.getLayout();
+            if (layout == null || text.isLayoutRequested()) return false;
+            pageIndex = next;
+            pageAnchor = layout.getLineStart(readerPages.firstLine(next));
+            showPageFrame(layout);
+            scroll.enter(direction, pageMotion);
+            save();
+            noteInteraction();
+        }
+        return true;
+    }
+
+    private void setHorizontalPages(boolean next) {
+        if (book == null || !supportsPaging() || restoring || horizontalPages == next) return;
+        save();
+        int anchor = pendingOffset;
+        float fraction = pendingLineFraction;
+        boolean bottom = pendingBottom;
+        restoring = true;
+        horizontalPages = next;
+        prefs.edit().putBoolean("readerHorizontalPages", next).apply();
+        readerPages = null;
+        scroll.setPaged(next);
+        scroll.setVerticalScrollBarEnabled(!next);
+        syncPageScrollRange();
+        setChromeVisible(true);
+        refreshPageControls();
+        restore(anchor, bottom, fraction);
     }
 
     private void move(int direction) {
@@ -2506,8 +2726,9 @@ public final class ReaderActivity extends Activity {
                 && (event.getKeyCode() == android.view.KeyEvent.KEYCODE_VOLUME_UP
                 || event.getKeyCode() == android.view.KeyEvent.KEYCODE_VOLUME_DOWN)
                 && !focusOnInteractiveControl()) {
-            if (event.getAction() == android.view.KeyEvent.ACTION_DOWN) {
+            if (event.getAction() == android.view.KeyEvent.ACTION_DOWN && scroll != null && !restoring) {
                 int direction = event.getKeyCode() == android.view.KeyEvent.KEYCODE_VOLUME_DOWN ? 1 : -1;
+                if (horizontalPages) { turnPage(direction); return true; }
                 commitReadingSegment();
                 if (direction < 0) scroll.smoothScrollBy(0, -Math.max(120, scroll.getHeight() - Ui.dp(this, 48)));
                 else scroll.smoothScrollBy(0, Math.max(120, scroll.getHeight() - Ui.dp(this, 48)));
@@ -2519,17 +2740,87 @@ public final class ReaderActivity extends Activity {
     }
 
     private void settings() {
-        // v2.1：11 项扁平列表改为 4 组按钮；每项直接绑定原处理 lambda，彻底消除 which 序号错配。
-        LinearLayout panel = Ui.column(this);
-        Ui.pad(panel, 8);
+        final String[] groups = {"可视选项", "控制选项", "文本与网络"};
+        new AlertDialog.Builder(this).setTitle("阅读设置").setItems(groups, (d, which) -> {
+            if (which == 0) visualSettings();
+            else if (which == 1) controlSettings();
+            else textSettings();
+        }).setNegativeButton("关闭", null).show();
+    }
 
-        panel.addView(sectionTitle("字号与排版"));
+    private void visualSettings() {
+        LinearLayout panel = Ui.column(this);
+        Ui.pad(panel, 12);
+        panel.addView(sectionTitle("排版与字体"));
+        panel.addView(settingsItemButton("排版设置…", this::openStyleSettings, "排版设置"));
+        panel.addView(settingsItemButton("正文字体：" + fontModeLabel(), this::openFontSettings, "当前正文字体"));
         panel.addView(settingsItemButton("字号减小  A−", () -> changeTextOrTheme(
                 () -> fontSize = Math.max(14, fontSize - 2), false), "字号减小"));
         panel.addView(settingsItemButton("字号增大  A＋", () -> changeTextOrTheme(
-                () -> fontSize = Math.min(32, fontSize + 2), false), "字号增大"));
+                () -> fontSize = Math.min(40, fontSize + 2), false), "字号增大"));
+        panel.addView(sectionTitle("阅读外观"));
+        panel.addView(settingsItemButton(() -> "主题：" + ThemePalette.presetName(theme) + "（点击切换）",
+                () -> changeTextOrTheme(() -> theme = (theme + 1) % ThemePalette.PRESET_COUNT, true), "主题"));
+        panel.addView(settingsItemButton(() -> {
+            boolean f = prefs.getBoolean(ThemeResolver.KEY_FOLLOW, false);
+            return f ? "跟随系统：开（手动主题选择将关闭跟随）" : "跟随系统：关（当前：" + themeName() + "）";
+        }, () -> {
+            boolean wasFollow = prefs.getBoolean(ThemeResolver.KEY_FOLLOW, false);
+            prefs.edit().putBoolean(ThemeResolver.KEY_FOLLOW, !wasFollow).apply();
+            recomputeTheme();
+            themeStatus.setText(wasFollow ? "跟随系统：关（当前：" + themeName() + "）"
+                    : "跟随系统：开（夜间系统主题 = 夜间；手动主题选择将关闭跟随）");
+            updateStatusVisibility();
+        }, "跟随系统"));
+        panel.addView(settingsItemButton(() -> "夜间调光：" + Math.round(DIM_LEVELS[dimIndex] * 100) + "%（点击循环）", () -> {
+            save();
+            dimIndex = (dimIndex + 1) % DIM_LEVELS.length;
+            applyDim();
+            prefs.edit().putInt("dimLevel", dimIndex).apply();
+        }, "夜间调光"));
+        showReaderOptions("可视选项", panel);
+    }
 
-        panel.addView(sectionTitle("阅读行为"));
+    private void controlSettings() {
+        LinearLayout panel = Ui.column(this);
+        Ui.pad(panel, 12);
+        panel.addView(sectionTitle("阅读方式与翻页动画"));
+        Button mode = Ui.button(this, "", null, "阅读方式");
+        Button motion = Ui.button(this, "", null, "翻页动画");
+        Button immersive = Ui.button(this, "", null, "沉浸阅读");
+        Runnable refresh = () -> {
+            mode.setText("阅读方式：" + (horizontalPages ? "左右分页" : "滚动"));
+            mode.setEnabled(supportsPaging());
+            motion.setText(horizontalPages ? "翻页动画：" + PAGE_MOTIONS[pageMotion] : "翻页动画（仅左右分页）");
+            motion.setEnabled(horizontalPages);
+            immersive.setText(horizontalPages ? "沉浸阅读（仅滚动）" :
+                    "沉浸阅读：" + (immersiveEnabled ? "开（下滑隐藏工具栏）" : "关"));
+            immersive.setEnabled(!horizontalPages);
+        };
+        mode.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("阅读方式")
+                .setSingleChoiceItems(new String[]{"滚动", "左右分页"}, horizontalPages ? 1 : 0, (d, selected) -> {
+                    setHorizontalPages(selected == 1);
+                    refresh.run();
+                    d.dismiss();
+                }).setNegativeButton("取消", null).show());
+        motion.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("翻页动画")
+                .setSingleChoiceItems(PAGE_MOTIONS, pageMotion, (d, selected) -> {
+                    pageMotion = selected;
+                    prefs.edit().putInt("readerPageMotion", selected).apply();
+                    refresh.run();
+                    d.dismiss();
+                }).setNegativeButton("取消", null).show());
+        immersive.setOnClickListener(v -> {
+            immersiveEnabled = !immersiveEnabled;
+            prefs.edit().putBoolean("immersive", immersiveEnabled).apply();
+            setChromeVisible(true);
+            refresh.run();
+        });
+        panel.addView(mode, new LinearLayout.LayoutParams(-1, -2));
+        panel.addView(motion, new LinearLayout.LayoutParams(-1, -2));
+        panel.addView(Ui.text(this, supportsPaging() ? "左右划动或使用底部按钮翻页。系统停用动画时不会播放翻页动画。"
+                : "左右分页仅适用于本地 TXT / MD。", 13, Ui.MUTED));
+        panel.addView(sectionTitle("阅读操作"));
         panel.addView(settingsItemButton(
                 () -> "自动翻页：" + (autoTurnIndex == 0 ? "关闭" : (AUTO_TURN_INTERVALS[autoTurnIndex] / 1000) + " 秒"),
                 () -> { save(); cycleAutoTurn(); }, "自动翻页"));
@@ -2537,54 +2828,32 @@ public final class ReaderActivity extends Activity {
             save();
             volumeKeysEnabled = !volumeKeysEnabled;
             prefs.edit().putBoolean("volumeKeys", volumeKeysEnabled).apply();
-            Toast.makeText(this, "音量键翻页：" + (volumeKeysEnabled ? "开" : "关"), Toast.LENGTH_SHORT).show();
         }, "音量键翻页"));
-        panel.addView(settingsItemButton(() -> "夜间调光：" + Math.round(DIM_LEVELS[dimIndex] * 100) + "%（点击循环）", () -> {
-            save();
-            dimIndex = (dimIndex + 1) % DIM_LEVELS.length;
-            applyDim();
-            prefs.edit().putInt("dimLevel", dimIndex).apply();
-            Toast.makeText(this, "夜间调光：" + Math.round(DIM_LEVELS[dimIndex] * 100) + "%", Toast.LENGTH_SHORT).show();
-        }, "夜间调光"));
-        panel.addView(settingsItemButton(() -> "沉浸阅读：" + (immersiveEnabled ? "开（下滑隐藏工具栏）" : "关"), () -> {
-            immersiveEnabled = !immersiveEnabled;
-            prefs.edit().putBoolean("immersive", immersiveEnabled).apply();
-            setChromeVisible(true);
-        }, "沉浸阅读"));
+        panel.addView(immersive, new LinearLayout.LayoutParams(-1, -2));
+        refresh.run();
+        showReaderOptions("控制选项", panel);
+    }
 
+    private void textSettings() {
+        LinearLayout panel = Ui.column(this);
+        Ui.pad(panel, 12);
         panel.addView(sectionTitle("文本"));
         panel.addView(settingsItemButton("外部样式…", this::externalCssMenu, "外部样式"));
-        // 无障碍：uiautomator 按 "文本编码" 定位（Ui.button 第 4 参即 setContentDescription）。
         panel.addView(settingsItemButton("文本编码：" + encodingModeLabel() + (isTextFormat() ? "" : "（仅 TXT/MD）"),
                 this::openEncodingSettings, "文本编码"));
-
-        panel.addView(sectionTitle("主题与网络"));
-        panel.addView(settingsItemButton(() -> "主题：" + ThemePalette.presetName(theme) + "（点击切换）",
-                () -> changeTextOrTheme(
-                        () -> theme = (theme + 1) % ThemePalette.PRESET_COUNT, true), "主题"));
-        panel.addView(settingsItemButton(() -> {
-            boolean f = prefs.getBoolean(ThemeResolver.KEY_FOLLOW, false);
-            return f ? "跟随系统：开（夜间系统主题 = 夜间；手动主题选择将关闭跟随）"
-                    : "跟随系统：关（当前：" + themeName() + "）";
-        }, () -> {
-            boolean nowFollow = prefs.getBoolean(ThemeResolver.KEY_FOLLOW, false);
-            prefs.edit().putBoolean(ThemeResolver.KEY_FOLLOW, !nowFollow).apply();
-            recomputeTheme();
-            themeStatus.setText(nowFollow ? "跟随系统：关（当前：" + themeName() + "）"
-                    : "跟随系统：开（夜间系统主题 = 夜间；手动主题选择将关闭跟随）");
-            updateStatusVisibility();
-        }, "跟随系统"));
+        panel.addView(sectionTitle("网络"));
         panel.addView(settingsItemButton(() -> "仅 Wi-Fi 预取：" + (prefetchWifiOnly ? "开" : "关"), () -> {
             save();
             prefetchWifiOnly = !prefetchWifiOnly;
             prefs.edit().putBoolean("prefetchWifiOnly", prefetchWifiOnly).apply();
-            Toast.makeText(this, "仅 Wi-Fi 预取：" + (prefetchWifiOnly ? "开" : "关")
-                    + (prefetchWifiOnly ? "（移动网络下不自动下载后续章节）" : "（移动网络也会预取）"), Toast.LENGTH_SHORT).show();
         }, "仅 Wi-Fi 预取"));
+        showReaderOptions("文本与网络", panel);
+    }
 
+    private void showReaderOptions(String title, LinearLayout panel) {
         ScrollView settingsScroll = new ScrollView(this);
         settingsScroll.addView(panel, new ScrollView.LayoutParams(-1, -2));
-        new AlertDialog.Builder(this).setTitle("阅读设置").setView(settingsScroll)
+        new AlertDialog.Builder(this).setTitle(title).setView(settingsScroll)
                 .setNegativeButton("关闭", null).show();
     }
 
