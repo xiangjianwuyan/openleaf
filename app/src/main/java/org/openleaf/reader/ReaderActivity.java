@@ -513,6 +513,20 @@ public final class ReaderActivity extends Activity {
         return b;
     }
 
+    /**
+     * 设置面板分组项（动态 label）：点击后先跑原处理逻辑，再用 labelSupplier 重新读取实时状态刷新按钮文案。
+     * 用 holder 数组而非直接引用 b，规避「变量 b 尚未初始化就被自身初始化器中的 lambda 捕获」的编译错误。
+     */
+    private Button settingsItemButton(java.util.function.Supplier<String> labelSupplier, Runnable onClick, String desc) {
+        final Button[] holder = new Button[1];
+        holder[0] = Ui.button(this, labelSupplier.get(), () -> {
+            onClick.run();
+            holder[0].setText(labelSupplier.get());
+        }, desc);
+        holder[0].setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
+        return holder[0];
+    }
+
     /** 字号 / 主题变更：保存锚点 → 改值 → 落 SP → 重排 → 还原（原 which 0/1/2 的共同流程）。 */
     private void changeTextOrTheme(Runnable change, boolean manualTheme) {
         save();
@@ -2053,10 +2067,6 @@ public final class ReaderActivity extends Activity {
     }
 
     private void settings() {
-        final boolean follow = prefs.getBoolean(ThemeResolver.KEY_FOLLOW, false);
-        String followLabel = follow
-                ? "跟随系统：开（夜间系统主题 = 夜间；手动主题选择将关闭跟随）"
-                : "跟随系统：关（当前：" + themeName() + "）";
         // v2.1：11 项扁平列表改为 4 组按钮；每项直接绑定原处理 lambda，彻底消除 which 序号错配。
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 8);
@@ -2069,22 +2079,22 @@ public final class ReaderActivity extends Activity {
 
         panel.addView(sectionTitle("阅读行为"));
         panel.addView(settingsItemButton(
-                "自动翻页：" + (autoTurnIndex == 0 ? "关闭" : (AUTO_TURN_INTERVALS[autoTurnIndex] / 1000) + " 秒"),
+                () -> "自动翻页：" + (autoTurnIndex == 0 ? "关闭" : (AUTO_TURN_INTERVALS[autoTurnIndex] / 1000) + " 秒"),
                 () -> { save(); cycleAutoTurn(); }, "自动翻页"));
-        panel.addView(settingsItemButton("音量键翻页：" + (volumeKeysEnabled ? "开" : "关"), () -> {
+        panel.addView(settingsItemButton(() -> "音量键翻页：" + (volumeKeysEnabled ? "开" : "关"), () -> {
             save();
             volumeKeysEnabled = !volumeKeysEnabled;
             prefs.edit().putBoolean("volumeKeys", volumeKeysEnabled).apply();
             Toast.makeText(this, "音量键翻页：" + (volumeKeysEnabled ? "开" : "关"), Toast.LENGTH_SHORT).show();
         }, "音量键翻页"));
-        panel.addView(settingsItemButton("夜间调光：" + Math.round(DIM_LEVELS[dimIndex] * 100) + "%（点击循环）", () -> {
+        panel.addView(settingsItemButton(() -> "夜间调光：" + Math.round(DIM_LEVELS[dimIndex] * 100) + "%（点击循环）", () -> {
             save();
             dimIndex = (dimIndex + 1) % DIM_LEVELS.length;
             applyDim();
             prefs.edit().putInt("dimLevel", dimIndex).apply();
             Toast.makeText(this, "夜间调光：" + Math.round(DIM_LEVELS[dimIndex] * 100) + "%", Toast.LENGTH_SHORT).show();
         }, "夜间调光"));
-        panel.addView(settingsItemButton("沉浸阅读：" + (immersiveEnabled ? "开（下滑隐藏工具栏）" : "关"), () -> {
+        panel.addView(settingsItemButton(() -> "沉浸阅读：" + (immersiveEnabled ? "开（下滑隐藏工具栏）" : "关"), () -> {
             immersiveEnabled = !immersiveEnabled;
             prefs.edit().putBoolean("immersive", immersiveEnabled).apply();
             setChromeVisible(true);
@@ -2097,10 +2107,14 @@ public final class ReaderActivity extends Activity {
                 this::openEncodingSettings, "文本编码"));
 
         panel.addView(sectionTitle("主题与网络"));
-        panel.addView(settingsItemButton("主题：" + ThemePalette.presetName(theme) + "（点击切换）",
+        panel.addView(settingsItemButton(() -> "主题：" + ThemePalette.presetName(theme) + "（点击切换）",
                 () -> changeTextOrTheme(
                         () -> theme = (theme + 1) % ThemePalette.PRESET_COUNT, true), "主题"));
-        panel.addView(settingsItemButton(followLabel, () -> {
+        panel.addView(settingsItemButton(() -> {
+            boolean f = prefs.getBoolean(ThemeResolver.KEY_FOLLOW, false);
+            return f ? "跟随系统：开（夜间系统主题 = 夜间；手动主题选择将关闭跟随）"
+                    : "跟随系统：关（当前：" + themeName() + "）";
+        }, () -> {
             boolean nowFollow = prefs.getBoolean(ThemeResolver.KEY_FOLLOW, false);
             prefs.edit().putBoolean(ThemeResolver.KEY_FOLLOW, !nowFollow).apply();
             recomputeTheme();
@@ -2108,7 +2122,7 @@ public final class ReaderActivity extends Activity {
                     : "跟随系统：开（夜间系统主题 = 夜间；手动主题选择将关闭跟随）");
             updateStatusVisibility();
         }, "跟随系统"));
-        panel.addView(settingsItemButton("仅 Wi-Fi 预取：" + (prefetchWifiOnly ? "开" : "关"), () -> {
+        panel.addView(settingsItemButton(() -> "仅 Wi-Fi 预取：" + (prefetchWifiOnly ? "开" : "关"), () -> {
             save();
             prefetchWifiOnly = !prefetchWifiOnly;
             prefs.edit().putBoolean("prefetchWifiOnly", prefetchWifiOnly).apply();
