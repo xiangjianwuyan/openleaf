@@ -1,6 +1,8 @@
 package org.openleaf.reader.core;
 
 import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -29,6 +31,65 @@ public final class ChapterRule {
     private static final int MAX_LINE_CODEPOINTS = 200;
     /** 自定义正则文本长度上限，防止误粘贴整篇文章。 */
     private static final int MAX_REGEX_CHARS = 512;
+
+    /**
+     * 预览结果：总命中行数、保守档基线命中行数、扩展档新增行数与示例标题。
+     * 纯数据，供 UI 直接展示；不改变 {@link #previewMatchCount(String, int)} 的既有语义。
+     */
+    public static final class Preview {
+        public final int totalMatches;
+        public final int conservativeMatches;
+        public final int addedMatches;
+        public final List<String> examples;
+
+        Preview(int totalMatches, int conservativeMatches, int addedMatches, List<String> examples) {
+            this.totalMatches = totalMatches;
+            this.conservativeMatches = conservativeMatches;
+            this.addedMatches = addedMatches;
+            this.examples = examples;
+        }
+    }
+
+    /** 正则匹配预算 exceeded 时由可中断 CharSequence 抛出，只在判定入口内部捕获。 */
+    private static final class RegexBudgetExceeded extends RuntimeException {
+        RegexBudgetExceeded() { super("regex match budget exceeded"); }
+    }
+
+    /**
+     * 把字符串包装成带截止时间的 CharSequence。java.util.regex 的 Matcher 在匹配过程中
+     * 通过 charAt/length/subSequence 访问输入，因此在这些访问点检查截止时间即可在
+     * 「匹配执行路径」上真正中断灾难性回溯，而不是靠线程超时或 UI 停止按钮。
+     */
+    private static final class BudgetCharSequence implements CharSequence {
+        private final String value;
+        private long deadlineNanos;
+
+        BudgetCharSequence(String value, long budgetMs) {
+            this.value = value;
+            this.deadlineNanos = budgetMs > 0
+                    ? System.nanoTime() + budgetMs * 1_000_000L : Long.MAX_VALUE;
+        }
+
+        private static BudgetCharSequence withDeadline(String value, long deadlineNanos) {
+            BudgetCharSequence sequence = new BudgetCharSequence(value, 0);
+            sequence.deadlineNanos = deadlineNanos;
+            return sequence;
+        }
+
+        private void checkDeadline() {
+            if (deadlineNanos != Long.MAX_VALUE && System.nanoTime() - deadlineNanos >= 0) {
+                throw new RegexBudgetExceeded();
+            }
+        }
+
+        @Override public int length() { checkDeadline(); return value.length(); }
+        @Override public char charAt(int index) { checkDeadline(); return value.charAt(index); }
+        @Override public CharSequence subSequence(int start, int end) {
+            checkDeadline();
+            return withDeadline(value.substring(start, end), deadlineNanos);
+        }
+        @Override public String toString() { checkDeadline(); return value; }
+    }
 
     // 以下正则全部由 OpenLeaf 自行编写，只使用 java.util.regex，不取自任何第三方样本。
 
@@ -123,6 +184,15 @@ public final class ChapterRule {
      * @param isolated 该行前后均为空行（或处于书边界）时为 true，与索引器口径一致
      */
     public boolean isHeading(String line, boolean isolated) {
+        return isHeading(line, isolated, 0L);
+    }
+
+    /**
+     * 带匹配预算的判定入口。budgetMs <= 0 表示不设预算（既有调用口径不变）；
+     * 只有自定义正则走可中断 CharSequence，其余档位使用的都是内置有界正则。
+     * 预算耗尽时本行按「非标题」处理，保守判定仍然有效，不会中断整本书索引。
+     */
+    public boolean isHeading(String line, boolean isolated, long budgetMs) {
         if (line == null || line.isEmpty()) return false;
         // 保守档与 0.26.0 逐字一致：原样委托，不做任何预处理。
         if (TextChapterHeadings.isHeading(line, isolated)) return true;
@@ -133,7 +203,12 @@ public final class ChapterRule {
         if (EXCLUDED.matcher(value).find()) return false;
 
         if (mode == Mode.CUSTOM) {
-            return compiled != null && compiled.matcher(value).find();
+            if (compiled == null) return false;
+            try {
+                return compiled.matcher(new BudgetCharSequence(value, budgetMs)).find();
+            } catch (RegexBudgetExceeded exhausted) {
+                return false; // 灾难性回溯在匹配执行路径上被中断，本行不当标题
+            }
         }
         if (mode == Mode.STANDARD) {
             return STANDARD_NUMBERED.matcher(value).matches()
@@ -164,6 +239,42 @@ public final class ChapterRule {
             if (isHeading(lines[i], previousBlank && nextBlank)) matches++;
         }
         return matches;
+    }
+
+    /**
+     * UI 预览专用纯函数：复用与索引器一致的「前后空行」孤立口径，分别统计保守档基线与
+     * 当前档位新增命中，并收集示例标题。只读取样本文本，不触碰任何索引语义。
+     */
+    public Preview preview(String sampleText, int maxLines, int maxExamples) {
+        if (sampleText == null || sampleText.isEmpty()) {
+            return new Preview(0, 0, 0, new ArrayList<>());
+        }
+        String normalized = sampleText.replace("\r\n", "\n").replace('\r', '\n');
+        String[] lines = normalized.split("\n", -1);
+        int limit = maxLines <= 0 ? lines.length : Math.min(maxLines, lines.length);
+        ChapterRule baseline = ChapterRule.conservative();
+        int total = 0;
+        int conservative = 0;
+        List<String> examples = new ArrayList<>();
+        for (int i = 0; i < limit; i++) {
+            boolean previousBlank = i == 0 || isBlank(lines[i - 1]);
+            boolean nextBlank = i + 1 >= lines.length || isBlank(lines[i + 1]);
+            boolean isolated = previousBlank && nextBlank;
+            boolean matched = isHeading(lines[i], isolated);
+            if (!matched) continue;
+            boolean base = baseline.isHeading(lines[i], isolated);
+            total++;
+            if (base) conservative++;
+            if (examples.size() < Math.max(0, maxExamples)) {
+                String title = trim(lines[i]);
+                examples.add(title.isEmpty() ? "（空标题行）" : boundedExample(title));
+            }
+        }
+        return new Preview(total, conservative, total - conservative, examples);
+    }
+
+    private static String boundedExample(String title) {
+        return title.length() <= 60 ? title : title.substring(0, 59) + "…";
     }
 
     private static boolean isBlank(String line) {
