@@ -391,6 +391,7 @@ public final class ReaderActivity extends Activity {
         TextView title = Ui.text(this, getIntent().getStringExtra("title"), 15, Ui.GREEN);
         title.setMaxLines(1);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         toolbar.addView(title, Ui.weight());
         Button layout = Ui.button(this, "排版", this::openStyleSettings, "排版设置"); toolbar.addView(layout);
         if (showDirectEdit()) {
@@ -527,20 +528,38 @@ public final class ReaderActivity extends Activity {
         inkColor = ink;
         root.setBackgroundColor(paper);
         text.setTextColor(ink);
-        chapterLabel.setTextColor(ink);
-        progress.setTextColor(ink);
-        if(searchStatus!=null)searchStatus.setTextColor(ink);
+        boolean darkPaper = Color.luminance(paper) < 0.27f;
+        int panel = darkPaper ? 0xFF202C25 : 0xFFF2F2E9;
+        int chip = darkPaper ? 0xFF304339 : 0xFFE7EDE1;
+        int strong = darkPaper ? 0xFFB8D4BD : 0xFF315C48;
+        int chromeInk = darkPaper ? 0xFFEAF2E8 : 0xFF26372C;
+        toolbar.setBackgroundColor(panel);
+        footer.setBackgroundColor(panel);
+        chapterLabel.setBackgroundColor(chip);
+        chapterLabel.setTextColor(chromeInk);
+        progress.setTextColor(chromeInk);
+        progress.setBackgroundColor(panel);
+        if (searchStatus != null) searchStatus.setTextColor(ink);
         for (int i = 0; i < toolbar.getChildCount(); i++) {
             View child = toolbar.getChildAt(i);
-            if (child instanceof TextView)
-                ((TextView) child).setTextColor(child instanceof Button ? Ui.GREEN : ink);
+            if (child instanceof Button) styleReaderAction((Button) child, panel, chromeInk);
+            else if (child instanceof TextView) ((TextView) child).setTextColor(chromeInk);
         }
         for (int i = 0; i < footer.getChildCount(); i++) {
             View child = footer.getChildAt(i);
-            if (child instanceof TextView) ((TextView) child).setTextColor(Ui.GREEN);
+            if (child instanceof Button) styleReaderAction((Button) child, i == 1 ? strong : chip,
+                    i == 1 ? (darkPaper ? 0xFF17291E : Color.WHITE) : chromeInk);
         }
         SystemBars.apply(this, paper); // 阶段 3-B 收尾：API30+ 用 WindowInsetsController 控制图标
         updateStatusVisibility(); // v2.1 页脚降噪：随配色刷新同步两行调试状态的可见性
+    }
+
+    private void styleReaderAction(Button button, int fill, int ink) {
+        button.setTextColor(new android.content.res.ColorStateList(new int[][] {
+                {-android.R.attr.state_enabled}, new int[0]
+        }, new int[] {Color.luminance(fill) < 0.27f ? 0xFF9EAFA2 : 0xFF626C61, ink}));
+        button.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(0x307A8B7C), Ui.shape(fill, 12, this), null));
     }
 
     private boolean showDirectEdit() { return supportsPaging() && displayedSource != null; }
@@ -591,17 +610,29 @@ public final class ReaderActivity extends Activity {
         }
     }
 
-    /** 设置面板分组小标题（11sp MUTED）。 */
+    /** 设置面板分组小标题：暖纸外壳下使用柔和鼠尾草分组胶囊，适配窄屏。 */
     private TextView sectionTitle(String label) {
-        TextView t = Ui.text(this, label, 11, Ui.MUTED);
-        t.setPadding(Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 2));
+        TextView t = Ui.text(this, label, 12, Color.rgb(55, 79, 63));
+        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        t.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        t.setBackground(Ui.outline(this, Color.rgb(232, 239, 227), 10));
+        t.setPadding(Ui.dp(this, 12), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, Ui.dp(this, 10), 0, Ui.dp(this, 4));
+        t.setLayoutParams(lp);
         return t;
     }
 
-    /** 设置面板分组项：宽度撑满；onClick 直接绑定原处理函数，不依赖 which 序号。 */
     private Button settingsItemButton(String label, Runnable onClick, String desc) {
         Button b = Ui.button(this, label, onClick, desc);
-        b.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
+        b.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.LEFT);
+        b.setTextColor(Color.rgb(38, 53, 44));
+        b.setBackground(Ui.outline(this, Color.WHITE, 10));
+        b.setMinHeight(Ui.dp(this, 52));
+        b.setPadding(Ui.dp(this, 14), Ui.dp(this, 10), Ui.dp(this, 14), Ui.dp(this, 10));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, Ui.dp(this, 3), 0, Ui.dp(this, 3));
+        b.setLayoutParams(lp);
         return b;
     }
 
@@ -615,7 +646,14 @@ public final class ReaderActivity extends Activity {
             onClick.run();
             holder[0].setText(labelSupplier.get());
         }, desc);
-        holder[0].setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
+        holder[0].setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.LEFT);
+        holder[0].setTextColor(Color.rgb(38, 53, 44));
+        holder[0].setBackground(Ui.outline(this, Color.WHITE, 10));
+        holder[0].setMinHeight(Ui.dp(this, 52));
+        holder[0].setPadding(Ui.dp(this, 14), Ui.dp(this, 10), Ui.dp(this, 14), Ui.dp(this, 10));
+        LinearLayout.LayoutParams dynamicLp = new LinearLayout.LayoutParams(-1, -2);
+        dynamicLp.setMargins(0, Ui.dp(this, 3), 0, Ui.dp(this, 3));
+        holder[0].setLayoutParams(dynamicLp);
         return holder[0];
     }
 
@@ -2740,12 +2778,14 @@ public final class ReaderActivity extends Activity {
     }
 
     private void settings() {
-        final String[] groups = {"可视选项", "控制选项", "文本与网络"};
-        new AlertDialog.Builder(this).setTitle("阅读设置").setItems(groups, (d, which) -> {
-            if (which == 0) visualSettings();
-            else if (which == 1) controlSettings();
-            else textSettings();
-        }).setNegativeButton("关闭", null).show();
+        LinearLayout panel = Ui.column(this);
+        Ui.pad(panel, 14);
+        panel.setBackgroundColor(Color.rgb(247, 243, 234));
+        panel.addView(Ui.text(this, "按阅读任务分组；每项显示当前值，打开或关闭不会改变正文锚点。", 14, Ui.MUTED));
+        panel.addView(settingsItemButton("可视选项  ·  字体、字号、主题", this::visualSettings, "可视选项"));
+        panel.addView(settingsItemButton("控制选项  ·  翻页、动画、手势", this::controlSettings, "控制选项"));
+        panel.addView(settingsItemButton("文本与网络  ·  编码、重排、预取", this::textSettings, "文本与网络"));
+        showReaderOptions("阅读设置", panel);
     }
 
     private void visualSettings() {
@@ -2785,9 +2825,9 @@ public final class ReaderActivity extends Activity {
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 12);
         panel.addView(sectionTitle("阅读方式与翻页动画"));
-        Button mode = Ui.button(this, "", null, "阅读方式");
-        Button motion = Ui.button(this, "", null, "翻页动画");
-        Button immersive = Ui.button(this, "", null, "沉浸阅读");
+        Button mode = settingsItemButton("", () -> { }, "阅读方式");
+        Button motion = settingsItemButton("", () -> { }, "翻页动画");
+        Button immersive = settingsItemButton("", () -> { }, "沉浸阅读");
         Runnable refresh = () -> {
             mode.setText("阅读方式：" + (horizontalPages ? "左右分页" : "滚动"));
             mode.setEnabled(supportsPaging());
@@ -2816,8 +2856,8 @@ public final class ReaderActivity extends Activity {
             setChromeVisible(true);
             refresh.run();
         });
-        panel.addView(mode, new LinearLayout.LayoutParams(-1, -2));
-        panel.addView(motion, new LinearLayout.LayoutParams(-1, -2));
+        panel.addView(mode);
+        panel.addView(motion);
         panel.addView(Ui.text(this, supportsPaging() ? "左右划动或使用底部按钮翻页。系统停用动画时不会播放翻页动画。"
                 : "左右分页仅适用于本地 TXT / MD。", 13, Ui.MUTED));
         panel.addView(sectionTitle("阅读操作"));
@@ -2829,7 +2869,7 @@ public final class ReaderActivity extends Activity {
             volumeKeysEnabled = !volumeKeysEnabled;
             prefs.edit().putBoolean("volumeKeys", volumeKeysEnabled).apply();
         }, "音量键翻页"));
-        panel.addView(immersive, new LinearLayout.LayoutParams(-1, -2));
+        panel.addView(immersive);
         refresh.run();
         showReaderOptions("控制选项", panel);
     }
@@ -2851,10 +2891,19 @@ public final class ReaderActivity extends Activity {
     }
 
     private void showReaderOptions(String title, LinearLayout panel) {
+        panel.setBackgroundColor(Color.rgb(247, 243, 234));
+        panel.setPadding(Ui.dp(this, 14), Ui.dp(this, 8), Ui.dp(this, 14), Ui.dp(this, 14));
         ScrollView settingsScroll = new ScrollView(this);
+        settingsScroll.setBackgroundColor(Color.rgb(247, 243, 234));
         settingsScroll.addView(panel, new ScrollView.LayoutParams(-1, -2));
-        new AlertDialog.Builder(this).setTitle(title).setView(settingsScroll)
-                .setNegativeButton("关闭", null).show();
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(title).setView(settingsScroll)
+                .setNegativeButton("关闭", null).create();
+        dialog.setOnShowListener(d -> {
+            if (dialog.getWindow() != null) {
+                dialog.getWindow().setBackgroundDrawable(Ui.shape(Color.rgb(247, 243, 234), 18, this));
+            }
+        });
+        dialog.show();
     }
 
     /** 沉浸式阅读：用 alpha 淡出工具栏/底栏，不改变布局尺寸（零回归）。 */
