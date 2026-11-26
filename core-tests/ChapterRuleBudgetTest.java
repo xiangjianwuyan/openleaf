@@ -18,6 +18,8 @@ import java.util.concurrent.ThreadFactory;
  * 且源文件样本解码与全量索引使用同一 charset/BOM 口径。纯 JVM，无 Android/JUnit。
  */
 public final class ChapterRuleBudgetTest {
+    private static final String BACKTRACKING_REGEX = "^(?:a|aa){35}c$|b$";
+    private static final String SLOW_LINE = repeat('a', 65) + "b";
     private static int passed;
     private static Path temporary;
 
@@ -27,7 +29,8 @@ public final class ChapterRuleBudgetTest {
             test("灾难性回溯在匹配执行路径按预算中断", ChapterRuleBudgetTest::catastrophicBacktrack);
             test("预算不影响正常自定义命中与保守兜底", ChapterRuleBudgetTest::normalMatchWithBudget);
             test("索引路径带预算仍能完成并保留保守章", ChapterRuleBudgetTest::indexWithBudget);
-            test("预览区分保守基线与扩展档新增", ChapterRuleBudgetTest::previewBreakdown);
+            test("预览同样中断灾难性回溯并保留后续命中", ChapterRuleBudgetTest::previewWithBudget);
+            test("预览区分保守基线、扩展档新增与 Markdown 围栏", ChapterRuleBudgetTest::previewBreakdown);
             test("源文件样本解码与索引同口径", ChapterRuleBudgetTest::sampleSameDecode);
             System.out.println("ChapterRuleBudgetTest: " + passed + " checks passed");
         } finally {
@@ -35,15 +38,13 @@ public final class ChapterRuleBudgetTest {
         }
     }
 
-    /** (a+)+$ 对 200 个 a + b 是教科书级灾难性回溯；无预算时足以挂住线程。 */
+    /** Below the 200-code-point guard; the fallback arm would match if backtracking completed. */
     private static void catastrophicBacktrack() throws Exception {
-        String evilLine = repeat('a', 200) + "b";
-        ChapterRule rule = ChapterRule.of(ChapterRule.Mode.CUSTOM, "(a+)+$");
-        long start = System.nanoTime();
-        boolean matched = withinBudget(() -> rule.isHeading(evilLine, true, 5L), 3000L);
-        long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
-        check(!matched, "被预算中断的灾难性规则不应命中该行");
-        check(elapsedMs < 3000L, "正则匹配未在预算内停止，耗时 " + elapsedMs + "ms");
+        ChapterRule rule = ChapterRule.of(ChapterRule.Mode.CUSTOM, BACKTRACKING_REGEX);
+        check(SLOW_LINE.codePointCount(0, SLOW_LINE.length()) < 200, "fixture must reach the regex");
+        check(rule.isHeading("ab", true, 25L), "the same compiled rule must reach the fallback arm on a short input");
+        boolean matched = withinBudget(() -> rule.isHeading(SLOW_LINE, true, 5L), 1000L);
+        check(!matched, "the regex budget must interrupt before reaching the matching fallback arm");
     }
 
     private static void normalMatchWithBudget() {
@@ -56,16 +57,25 @@ public final class ChapterRuleBudgetTest {
     }
 
     private static void indexWithBudget() throws Exception {
-        String content = "第一章 归来\n正文\n" + repeat('a', 200) + "b\n第二章 远行\n更多正文\n";
+        String content = "第一章 归来\n正文\n" + SLOW_LINE + "\n第二章 远行\n更多正文\n";
         File file = write("budget.txt", content.getBytes(StandardCharsets.UTF_8));
-        ChapterRule rule = ChapterRule.of(ChapterRule.Mode.CUSTOM, "(a+)+$");
+        ChapterRule rule = ChapterRule.of(ChapterRule.Mode.CUSTOM, BACKTRACKING_REGEX);
         TextChapterIndexer.Result result = withinBudget(
                 () -> TextChapterIndexer.index(file, cacheDir(), rule, null, 5L), 5000L);
         try {
-            check(result != null && result.chapters.size() >= 2, "带预算索引应保留保守档章节");
+            check(result != null, "带预算索引应保留保守档章节");
+            equal(2, result.chapters.size());
+            equal("第二章 远行", result.chapters.get(1).title);
         } finally {
             if (result != null) result.cacheFile.delete();
         }
+    }
+
+    private static void previewWithBudget() throws Exception {
+        ChapterRule rule = ChapterRule.of(ChapterRule.Mode.CUSTOM, BACKTRACKING_REGEX);
+        ChapterRule.Preview result = withinBudget(() -> rule.preview(SLOW_LINE + "\nab\n", 0, 4), 1000L);
+        equal(1, result.totalMatches);
+        equal("ab", result.examples.get(0));
     }
 
     private static void previewBreakdown() {
@@ -76,6 +86,8 @@ public final class ChapterRuleBudgetTest {
         equal(1, custom.conservativeMatches);
         equal(1, custom.addedMatches);
         equal("CH07 星火", custom.examples.get(1));
+        equal(1, ChapterRule.of(ChapterRule.Mode.CUSTOM, "^CH\\d+")
+                .preview("```txt\nCH06 围栏内\n```\nCH07 星火\n", 0, 4).addedMatches);
         ChapterRule.Preview standard = ChapterRule.of(ChapterRule.Mode.STANDARD, "")
                 .preview(sample, 0, 1);
         equal(1, standard.examples.size());

@@ -149,7 +149,6 @@ public final class ReaderActivity extends Activity {
     private float pendingLineFraction;
     private boolean restoring, pendingBottom;
     private int layoutGeneration;
-    private int bookReopenGeneration; // 编码切换重开书的 generation 防竞态
     private LinearLayout root, toolbar, footer;
     private ScrollView scroll;
     /** 阶段 4 精修： immersive 阅读（向下滚动隐藏工具栏/底栏，停止或上滑恢复），借鉴 baca. 形态。 */
@@ -172,7 +171,11 @@ public final class ReaderActivity extends Activity {
     private static final int RULE_PREVIEW_SAMPLE_CHARS=4000;
     private static final int RULE_PREVIEW_MAX_LINES=400;
     private int rulePreviewGeneration;
-    private int ruleRebuildGeneration;  // 规则重建独立 generation，弃置过期/取消结果
+    private int indexGeneration; // 编码与规则共用一个结果所有者
+    private Future<?> indexFuture;
+    private AlertDialog indexDialog;
+    private final ExecutorService rulePreviewWorker = Executors.newSingleThreadExecutor();
+    private Future<?> rulePreviewFuture;
     private final Handler rulePreviewHandler = new Handler(Looper.getMainLooper());
     private Runnable rulePreviewTask;
     private static final long RULE_PREVIEW_DEBOUNCE_MS = 250L;
@@ -248,8 +251,9 @@ public final class ReaderActivity extends Activity {
                 try (BookAccess access = store.open(record)) {
                 java.io.File file = access.file;
                 // P1-3：按书读取编码覆盖（默认 AUTO→null，走 0.27.0 原自动检测）
+                ChapterRule appliedRule = currentRule();
                 LazyChapterBook parsed = LazyChapterBook.open(
-                        file, record.format, getCacheDir(), currentRule(), currentEncodingOverride(file),
+                        file, record.format, getCacheDir(), appliedRule, currentEncodingOverride(file),
                         TextChapterIndexer.DEFAULT_RULE_MATCH_BUDGET_MS);
                 int migrationAnchor = -1;
                 if (savedAnchor == null && state == null && parsed.size() > 0
@@ -306,6 +310,7 @@ public final class ReaderActivity extends Activity {
                     segmentStartMs = sessionStartMs;
                     startAutoTurn();
                     promptSourceUpdateIfNeeded();
+                    if (isTextFormat()) warnUnavailableRule(appliedRule);
                     if (getIntent().getBooleanExtra("startBookSearch", false)) {
                         getIntent().removeExtra("startBookSearch");
                         launchSearch();
@@ -751,18 +756,22 @@ public final class ReaderActivity extends Activity {
     }
 
     private void reloadBook() {
+        cancelIndexChange();
+        cancelRulePreview();
+        final int generation = indexGeneration;
         worker.execute(() -> {
             try {
                 BookStore store = new BookStore(this);
                 BookStore.Book record = store.find(id);
-                currentRecord = record;
+                ChapterRule appliedRule = currentRule();
                 try (BookAccess access = store.open(record)) {
                     final LazyChapterBook fresh = LazyChapterBook.open(
-                            access.file, record.format, getCacheDir(), currentRule(),
+                            access.file, record.format, getCacheDir(), appliedRule,
                             currentEncodingOverride(access.file),
                             TextChapterIndexer.DEFAULT_RULE_MATCH_BUDGET_MS);
                     runOnUiThread(() -> {
-                        if (isDestroyed()) { fresh.close(); return; }
+                        if (isDestroyed() || isFinishing() || generation != indexGeneration) { fresh.close(); return; }
+                        currentRecord = record;
                         if (book != null) book.close();
                         book = fresh;
                         progressModel = new ProgressModel(book);
@@ -771,11 +780,15 @@ public final class ReaderActivity extends Activity {
                         build();
                         showChapter(pendingOffset, pendingBottom, pendingLineFraction);
                         Toast.makeText(this, "文件已更新，正文已重新载入", Toast.LENGTH_SHORT).show();
+                        if (isTextFormat()) warnUnavailableRule(appliedRule);
                     });
                 }
             } catch (Exception failure) {
-                runOnUiThread(() -> Toast.makeText(this, "文件已保存，但重新载入失败：" + failure.getMessage(),
-                        Toast.LENGTH_LONG).show());
+                runOnUiThread(() -> {
+                    if (isDestroyed() || isFinishing() || generation != indexGeneration) return;
+                    Toast.makeText(this, "文件已保存，但重新载入失败：" + failure.getMessage(),
+                            Toast.LENGTH_LONG).show();
+                });
             }
         });
     }
@@ -1118,17 +1131,14 @@ public final class ReaderActivity extends Activity {
         showChapter(0, false, 0);
     }
 
-    /**
-     * P1-2 目录：自定义对话框（搜索框 + 列表），内存过滤章节标题，不查正文、不重建索引。
-     * 保留首项「章节识别规则…」，并用 positionOf 定位/标记当前章。
-     */
+    /** 仅过滤目录标题；定位当前章不改变正文的阅读位置。 */
     private void contents() {
         if (book == null) return;
+        final boolean textFormat = isTextFormat();
         final int total = book.size();
         final String[] titles = new String[total];
         for (int i = 0; i < total; i++) titles[i] = chapterName(i);
-        final java.util.List<ChapterOutline.Node> nodes =
-                ChapterOutline.build(java.util.Arrays.asList(titles));
+        final List<ChapterOutline.Node> nodes = ChapterOutline.build(java.util.Arrays.asList(titles));
         final int[] visible = ChapterOutline.visible(nodes, null);
 
         LinearLayout panel = Ui.column(this);
@@ -1138,21 +1148,40 @@ public final class ReaderActivity extends Activity {
         search.setHint("输入章节标题关键词");
         search.setContentDescription("目录搜索框");
         panel.addView(search, new LinearLayout.LayoutParams(-1, -2));
+        final TextView matchStatus = Ui.text(this, "", 13, Ui.MUTED);
         final ListView list = new ListView(this);
         list.setContentDescription("章节列表");
+        final List<Integer> rowMapping = new ArrayList<>();
+        if (textFormat) {
+            LinearLayout statusRow = Ui.row(this);
+            matchStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+            statusRow.addView(matchStatus, Ui.weight());
+            statusRow.addView(Ui.button(this, "定位当前章", () -> {
+                if (search.length() > 0) search.setText("");
+                int row = rowMapping.indexOf(chapter);
+                if (row >= 0) list.setSelection(row);
+            }, "在目录列表中定位当前章"));
+            panel.addView(statusRow);
+        }
         panel.addView(list, new LinearLayout.LayoutParams(-1, Ui.dp(this, 380)));
 
-        final java.util.List<Integer> rowMapping = new java.util.ArrayList<>();
-        final AlertDialog dialog = new AlertDialog.Builder(this).setTitle("目录")
-                .setView(panel).setNegativeButton("关闭", null).create();
-        final Runnable[] refresh = new Runnable[1];
-        refresh[0] = () -> {
-            int[] filtered = TocFilter.filterVisible(nodes, visible, search.getText().toString());
+        AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle("目录")
+                .setView(panel).setNegativeButton("关闭", null);
+        if (textFormat) builder.setNeutralButton("章节识别规则…", (d, which) -> {
+            d.dismiss();
+            openChapterRuleSettings();
+        });
+        final AlertDialog dialog = builder.create();
+        final Runnable refresh = () -> {
+            String query = search.getText().toString();
+            int[] filtered = TocFilter.filterVisible(nodes, visible, query);
             int currentRow = TocFilter.positionOf(filtered, chapter);
-            java.util.List<String> labels = new java.util.ArrayList<>();
+            List<String> labels = new ArrayList<>();
             rowMapping.clear();
-            labels.add("章节识别规则…");
-            rowMapping.add(-1);
+            if (!textFormat) {
+                labels.add("章节识别规则…");
+                rowMapping.add(-1);
+            }
             for (int index : filtered) {
                 if (index < 0 || index >= nodes.size()) continue;
                 ChapterOutline.Node node = nodes.get(index);
@@ -1160,24 +1189,29 @@ public final class ReaderActivity extends Activity {
                 labels.add(indent + node.title + (index == chapter ? "  ● 当前" : ""));
                 rowMapping.add(index);
             }
+            if (textFormat) matchStatus.setText(query.trim().isEmpty() ? "共 " + visible.length + " 章"
+                    : filtered.length == 0 ? "未找到匹配章节"
+                    : "匹配 " + filtered.length + " / " + visible.length + " 章");
             list.setAdapter(new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels));
-            if (currentRow >= 0 && currentRow + 1 < rowMapping.size()) list.setSelection(currentRow + 1);
+            if (currentRow >= 0) list.setSelection(currentRow + (textFormat ? 0 : 1));
         };
         search.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
-            @Override public void afterTextChanged(Editable s) { refresh[0].run(); }
+            @Override public void afterTextChanged(Editable s) { refresh.run(); }
         });
         list.setOnItemClickListener((parent, view, position, row) -> {
             if (position < 0 || position >= rowMapping.size()) return;
             int index = rowMapping.get(position);
             if (index < 0) { dialog.dismiss(); openChapterRuleSettings(); return; }
-            save();
-            chapter = index;
-            showChapter(0, false, 0);
+            if (!textFormat || index != chapter) {
+                save();
+                chapter = index;
+                showChapter(0, false, 0);
+            }
             dialog.dismiss();
         });
-        refresh[0].run();
+        refresh.run();
         dialog.show();
     }
 
@@ -1197,14 +1231,12 @@ public final class ReaderActivity extends Activity {
         return index < 0 || index > 4 ? 0 : index;
     }
 
-    /** UI 线程安全：只读 prefs，AUTO 返回 null 走原自动检测。 */
-    private Charset currentEncodingOverride() {
-        return TextEncoding.charsetOf(TextEncoding.fromIndex(currentEncodingIndex()));
+    private Charset currentEncodingOverride(java.io.File source) {
+        return encodingOverride(source, TextEncoding.fromIndex(currentEncodingIndex()));
     }
 
     /** 后台调用：UTF-16 按源文件实际 BOM 定 LE/BE；无 BOM 先按 LE（启发式）。 */
-    private Charset currentEncodingOverride(java.io.File source) {
-        TextEncoding.Mode mode = TextEncoding.fromIndex(currentEncodingIndex());
+    private static Charset encodingOverride(java.io.File source, TextEncoding.Mode mode) {
         if (mode == TextEncoding.Mode.UTF_16) {
             byte[] prefix = new byte[2];
             int read = 0;
@@ -1245,63 +1277,14 @@ public final class ReaderActivity extends Activity {
                 .setSingleChoiceItems(options, currentEncodingIndex(), (d, which) -> {
                     prefs.edit().putInt("text_encoding_" + id, which).apply();
                     d.dismiss();
-                    reopenWithEncoding(TextEncoding.fromIndex(which));
+                    reopenWithEncoding(which);
                 })
                 .setNegativeButton("取消", null).show();
     }
 
-    /**
-     * P1-3 重开书：复用 rebuildIndexAndOutline 的 worker + generation + sourceStart/ReadingAnchor 骨架，
-     * 只把 open 的 override 参数换掉，不新造位置体系。
-     */
-    private void reopenWithEncoding(TextEncoding.Mode mode) {
-        if (book == null || currentRecord == null || id == null || isFinishing()) return;
-        if (mode == null) mode = TextEncoding.Mode.AUTO;
-        save();
-        final int generation = ++bookReopenGeneration;
-        final long oldSourceStart = cumulativeSourceOffset(chapter);
-        final ReadingAnchor savedAnchor = ReadingAnchor.parse(prefs.getString("anchor_" + id, null));
-        final int oldOffset = pendingOffset;
-        final boolean oldBottom = pendingBottom;
-        final float oldFraction = pendingLineFraction;
-        worker.execute(() -> {
-            try {
-                BookStore store = new BookStore(this);
-                BookStore.Book record = store.find(id);
-                try (BookAccess access = store.open(record)) {
-                    Charset override = currentEncodingOverride(access.file);
-                    final LazyChapterBook fresh = LazyChapterBook.open(
-                            access.file, record.format, getCacheDir(), currentRule(), override,
-                            TextChapterIndexer.DEFAULT_RULE_MATCH_BUDGET_MS);
-                    runOnUiThread(() -> {
-                        if (isDestroyed() || generation != bookReopenGeneration) { fresh.close(); return; }
-                        book.close();
-                        book = fresh;
-                        progressModel = new ProgressModel(book);
-                        int[] mapped = new int[]{oldOffset};
-                        if (savedAnchor != null) {
-                            chapter = Math.max(0, resolveAnchor(savedAnchor, mapped));
-                        } else {
-                            chapter = 0;
-                            for (int i = 0; i < book.size() && cumulativeSourceOffset(book, i) <= oldSourceStart; i++)
-                                chapter = i;
-                            mapped[0] = Math.max(0, (int) (oldSourceStart - cumulativeSourceOffset(book, chapter)));
-                        }
-                        chapter = Math.max(0, Math.min(chapter, book.size() - 1));
-                        pendingOffset = Math.max(0, Math.min(mapped[0], book.meta(chapter).charCount));
-                        pendingBottom = oldBottom;
-                        pendingLineFraction = oldFraction;
-                        build();
-                        showChapter(pendingOffset, pendingBottom, pendingLineFraction);
-                        Toast.makeText(this, "已按 " + encodingModeLabel() + " 重新打开，仍在原位置",
-                                Toast.LENGTH_SHORT).show();
-                    });
-                }
-            } catch (Exception failure) {
-                runOnUiThread(() -> Toast.makeText(this, "切换编码失败：" + failure.getMessage(),
-                        Toast.LENGTH_LONG).show());
-            }
-        });
+    private void reopenWithEncoding(int which) {
+        reopenTextIndex(currentRule(), TextEncoding.fromIndex(which), false,
+                () -> prefs.edit().putInt("text_encoding_" + id, which).apply());
     }
 
     /** P1-3：按书覆盖存在性标记；显式保守档（mode=0）与「无覆盖跟随全局」靠它区分。旧书不迁移。 */
@@ -1320,6 +1303,13 @@ public final class ReaderActivity extends Activity {
     private ChapterRule currentRule() {
         if (!hasBookRuleOverride()) return globalRule();
         return ChapterRule.of(modeFromIndex(currentRuleMode()), currentRuleCustom());
+    }
+
+    private void warnUnavailableRule(ChapterRule rule) {
+        if (rule.hasUnavailableCustomPattern()) {
+            Toast.makeText(this, "已保存的自定义正则在此版本不可用，当前目录仅使用保守规则；可在章节识别规则中修改",
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     private static int clampRuleMode(int mode) {
@@ -1390,11 +1380,12 @@ public final class ReaderActivity extends Activity {
         regexInput.setContentDescription("自定义章节正则");
         final TextView validation = Ui.text(this, "", 12, Ui.MUTED);
         final AlertDialog[] dialogHolder = new AlertDialog[1];
+        final ChapterRule[] readyRule = {null};
 
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 18);
         panel.addView(Ui.text(this, "范围：仅本书　默认来自：全局规则", 13, Ui.MUTED));
-        panel.addView(Ui.text(this, "自定义档是保守判定的补充，不是全量替换", 12, Ui.MUTED));
+        panel.addView(Ui.text(this, "自定义档补充保守判定。Android 仅支持简单正则，如 ^第\\d+章。", 12, Ui.MUTED));
         Ui.gap(panel, 8);
         final TextView preview = Ui.text(this, "命中预览：计算中…", 14, Ui.MUTED);
         final TextView sampleLabel = Ui.text(this, "样本：第 1 章（源文件解码）", 13, Ui.MUTED);
@@ -1406,8 +1397,8 @@ public final class ReaderActivity extends Activity {
             sampleLabel.setText(sampleChapter[0] == 0
                     ? "样本：第 1 章（源文件解码）"
                     : "样本：第 " + (sampleChapter[0] + 1) + " 章（当前索引缓存）");
-            scheduleRulePreview(preview, ChapterRule.of(modeFromIndex(selected[0]),
-                    regexInput.getText().toString()), sampleChapter[0]);
+            scheduleRulePreview(dialogHolder[0], preview, validation, readyRule, selected[0],
+                    regexInput.getText().toString(), sampleChapter[0]);
         }, "取其他章节作为章节规则样本"));
         panel.addView(sampleRow);
         Ui.gap(panel, 6);
@@ -1420,12 +1411,8 @@ public final class ReaderActivity extends Activity {
             buttons[i] = Ui.button(this, modeButtonLabels(selected[0])[i], () -> {
                 selected[0] = which;
                 refreshModeButtons(buttons, selected[0]);
-                String error = which == 3
-                        ? ChapterRule.conservative().validateRegex(regexInput.getText().toString()) : null;
-                validation.setText(error == null ? "" : error);
-                dialogHolder[0].getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(error == null);
-                scheduleRulePreview(preview, ChapterRule.of(modeFromIndex(which), regexInput.getText().toString()),
-                        sampleChapter[0]);
+                scheduleRulePreview(dialogHolder[0], preview, validation, readyRule, which,
+                        regexInput.getText().toString(), sampleChapter[0]);
             }, "章节规则档位" + which);
             modes.addView(buttons[i], Ui.weight());
         }
@@ -1442,38 +1429,20 @@ public final class ReaderActivity extends Activity {
                 .setNegativeButton("取消", null)
                 .create();
         dialogHolder[0] = dialog;
-        // 关闭面板即弃置在途预览：generation 自增 + 移除未执行的防抖任务。
-        dialog.setOnDismissListener(d -> {
-            rulePreviewGeneration++;
-            rulePreviewHandler.removeCallbacksAndMessages(null);
-            rulePreviewTask = null;
-        });
+        dialog.setOnDismissListener(d -> cancelRulePreview());
         dialog.setOnShowListener(d -> {
-            String initialError = selected[0] == 3
-                    ? ChapterRule.conservative().validateRegex(regexInput.getText().toString()) : null;
-            validation.setText(initialError == null ? "" : initialError);
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(initialError == null);
             regexInput.addTextChangedListener(new TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
                 @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
-                @Override public void afterTextChanged(android.text.Editable s) {
-                    String error = selected[0] == 3
-                            ? ChapterRule.conservative().validateRegex(s.toString()) : null;
-                    validation.setText(error == null ? "" : error);
-                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(error == null);
-                    scheduleRulePreview(preview,
-                            ChapterRule.of(modeFromIndex(selected[0]), s.toString()), sampleChapter[0]);
+                @Override public void afterTextChanged(Editable s) {
+                    scheduleRulePreview(dialog, preview, validation, readyRule, selected[0],
+                            s.toString(), sampleChapter[0]);
                 }
             });
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-                String regex = regexInput.getText().toString();
-                if (selected[0] == 3) {
-                    String error = ChapterRule.conservative().validateRegex(regex);
-                    if (error != null) { validation.setText(error); return; }
-                }
-                ChapterRule rule = ChapterRule.of(modeFromIndex(selected[0]), regex);
+                ChapterRule rule = readyRule[0];
+                if (rule == null) return;
                 dialog.dismiss();
-                // 事务顺序：重建成功 → 写按书键。失败/取消/过期都不写偏好、不动旧索引。
                 rebuildIndexAndOutline(rule, () -> persistBookRule(rule));
             });
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
@@ -1487,48 +1456,83 @@ public final class ReaderActivity extends Activity {
                 // 同样先重建成功，再删按书键；删除失败时本书继续使用原覆盖。
                 rebuildIndexAndOutline(fallback, this::clearBookRule);
             });
-            updateRulePreview(preview, ChapterRule.of(modeFromIndex(selected[0]), regexInput.getText().toString()),
-                    sampleChapter[0]);
+            scheduleRulePreview(dialog, preview, validation, readyRule, selected[0],
+                    regexInput.getText().toString(), sampleChapter[0]);
         });
         dialog.show();
     }
 
-    /** 250ms 防抖：连点档位/输入正则只保留最后一次预览；面板关闭时 dismiss 回调撤掉未执行任务。 */
-    private void scheduleRulePreview(TextView label, ChapterRule rule, int sampleChapter) {
+    private void cancelRulePreview() {
+        rulePreviewGeneration++;
         if (rulePreviewTask != null) rulePreviewHandler.removeCallbacks(rulePreviewTask);
-        rulePreviewTask = () -> updateRulePreview(label, rule, sampleChapter);
+        rulePreviewTask = null;
+        if (rulePreviewFuture != null) rulePreviewFuture.cancel(true);
+        rulePreviewFuture = null;
+    }
+
+    /** 先废弃旧结果，再防抖；编译和取样均不上 UI 线程，也不阻塞目录重建。 */
+    private void scheduleRulePreview(AlertDialog dialog, TextView label, TextView validation,
+                                     ChapterRule[] readyRule, int mode, String regex, int sampleChapterIndex) {
+        cancelRulePreview();
+        if (book == null || isFinishing() || isDestroyed() || !dialog.isShowing()) return;
+        final int generation = rulePreviewGeneration;
+        final LazyChapterBook sampleBook = book;
+        final String bookId = id;
+        final int sampleIndex = Math.max(0, Math.min(sampleChapterIndex, sampleBook.size() - 1));
+        final TextEncoding.Mode encoding = TextEncoding.fromIndex(currentEncodingIndex());
+        readyRule[0] = null;
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+        validation.setText("");
+        label.setText("命中预览：计算中…");
+        rulePreviewTask = () -> {
+            rulePreviewTask = null;
+            rulePreviewFuture = rulePreviewWorker.submit(() -> {
+                ChapterRule.Mode ruleMode = modeFromIndex(mode);
+                String error = ruleMode == ChapterRule.Mode.CUSTOM
+                        ? ChapterRule.conservative().validateRegex(regex) : null;
+                ChapterRule rule = error == null ? ChapterRule.of(ruleMode, regex) : null;
+                runOnUiThread(() -> {
+                    if (!isRulePreviewCurrent(dialog, generation)) return;
+                    readyRule[0] = rule;
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(rule != null);
+                    if (error != null) {
+                        validation.setText(error);
+                        label.setText("修正规则后查看预览");
+                    }
+                });
+                if (rule == null || Thread.currentThread().isInterrupted()) return;
+                String sample;
+                ChapterRule.Preview result;
+                try {
+                    if (sampleIndex == 0) {
+                        BookStore store = new BookStore(this);
+                        try (BookAccess access = store.open(store.find(bookId))) {
+                            sample = TextChapterIndexer.readSample(access.file,
+                                    encodingOverride(access.file, encoding), RULE_PREVIEW_SAMPLE_CHARS);
+                        }
+                    } else {
+                        sample = sampleBook.head(sampleIndex, RULE_PREVIEW_SAMPLE_CHARS);
+                    }
+                    if (Thread.currentThread().isInterrupted()) return;
+                    result = rule.preview(sample, RULE_PREVIEW_MAX_LINES, 4);
+                } catch (CancellationException cancelled) {
+                    return;
+                } catch (Exception failure) {
+                    runOnUiThread(() -> {
+                        if (isRulePreviewCurrent(dialog, generation)) label.setText("无法读取样本，建议换样本");
+                    });
+                    return;
+                }
+                runOnUiThread(() -> {
+                    if (isRulePreviewCurrent(dialog, generation)) label.setText(formatRulePreview(result, rule.isCustom()));
+                });
+            });
+        };
         rulePreviewHandler.postDelayed(rulePreviewTask, RULE_PREVIEW_DEBOUNCE_MS);
     }
 
-    /**
-     * 预览与全量索引用同一解码：第 1 章直接从源文件按本书编码设置解码；
-     * 其他章按 C8 要求取 book 已加载的章节文本（不从渲染文本重分章）。
-     */
-    private void updateRulePreview(TextView label, ChapterRule rule, int sampleChapterIndex) {
-        if (book == null || label == null || isFinishing() || isDestroyed()) return;
-        final int generation = ++rulePreviewGeneration;
-        final int sampleIndex = Math.max(0, Math.min(sampleChapterIndex, book.size() - 1));
-        final boolean fromSource = sampleIndex == 0;
-        worker.execute(() -> {
-            String sample = "";
-            try {
-                if (fromSource) {
-                    BookStore store = new BookStore(ReaderActivity.this);
-                    BookStore.Book record = store.find(id);
-                    try (BookAccess access = store.open(record)) {
-                        sample = TextChapterIndexer.readSample(access.file,
-                                currentEncodingOverride(access.file), RULE_PREVIEW_SAMPLE_CHARS);
-                    }
-                } else {
-                    sample = book.head(sampleIndex, RULE_PREVIEW_SAMPLE_CHARS);
-                }
-            } catch (Exception ignored) { /* 取样本失败按零命中处理，并给出换样本提示 */ }
-            final ChapterRule.Preview result = rule.preview(sample, RULE_PREVIEW_MAX_LINES, 4);
-            runOnUiThread(() -> {
-                if (isDestroyed() || isFinishing() || generation != rulePreviewGeneration) return;
-                label.setText(formatRulePreview(result, rule.isCustom()));
-            });
-        });
+    private boolean isRulePreviewCurrent(AlertDialog dialog, int generation) {
+        return generation == rulePreviewGeneration && !isDestroyed() && !isFinishing() && dialog.isShowing();
     }
 
     /** 区分保守基线与扩展档新增；零命中只建议换样本，不宣称「全书无目录」。 */
@@ -1543,44 +1547,62 @@ public final class ReaderActivity extends Activity {
         return text.toString();
     }
 
-    /**
-     * 按新规则重建 TXT 索引并刷新目录：worker + BookAccess + 独立 generation 防竞态，
-     * 用 sourceStart / ReadingAnchor 锚点恢复阅读位置。只有成功后才回调 onSuccess 落偏好。
-     */
     private void rebuildIndexAndOutline(ChapterRule rule, Runnable onSuccess) {
-        if (book == null || currentRecord == null || id == null || isFinishing()) return;
+        reopenTextIndex(rule, TextEncoding.fromIndex(currentEncodingIndex()), true, onSuccess);
+    }
+
+    /** 编码与规则只能由同一代请求提交；保留原来的源锚点和已提交设置直到打开成功。 */
+    private void reopenTextIndex(ChapterRule rule, TextEncoding.Mode encoding, boolean rebuild,
+                                 Runnable onSuccess) {
+        if (book == null || currentRecord == null || id == null || isFinishing() || isDestroyed()) return;
+        cancelIndexChange();
+        cancelRulePreview();
         save();
-        final int generation = ++ruleRebuildGeneration;
+        final int generation = indexGeneration;
+        final String bookId = id;
         final long oldSourceStart = cumulativeSourceOffset(chapter);
         final ReadingAnchor savedAnchor = ReadingAnchor.parse(prefs.getString("anchor_" + id, null));
         final int oldOffset = pendingOffset;
         final boolean oldBottom = pendingBottom;
         final float oldFraction = pendingLineFraction;
-        worker.execute(() -> {
-            final LazyChapterBook fresh;
+        indexDialog = new AlertDialog.Builder(this)
+                .setTitle(rebuild ? "正在重建目录…" : "正在切换文本编码…")
+                .setMessage("取消将保留当前目录和阅读位置。")
+                .setNegativeButton("取消", null)
+                .setOnCancelListener(d -> { if (generation == indexGeneration) cancelIndexChange(); })
+                .create();
+        indexDialog.setCanceledOnTouchOutside(false);
+        indexDialog.show();
+        indexDialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v -> cancelIndexChange());
+        indexFuture = worker.submit(() -> {
+            LazyChapterBook opened = null;
             try {
                 BookStore store = new BookStore(this);
-                BookStore.Book record = store.find(id);
+                BookStore.Book record = store.find(bookId);
                 try (BookAccess access = store.open(record)) {
-                    // T-01：重建必须沿用本书已手动指定的编码，不能静默退回 AUTO。
-                    Charset override = currentEncodingOverride(access.file);
-                    fresh = LazyChapterBook.open(
-                            access.file, record.format, getCacheDir(), rule, override,
+                    if (Thread.currentThread().isInterrupted()) return;
+                    Charset override = encodingOverride(access.file, encoding);
+                    opened = LazyChapterBook.open(access.file, record.format, getCacheDir(), rule, override,
                             TextChapterIndexer.DEFAULT_RULE_MATCH_BUDGET_MS);
                 }
             } catch (Exception failure) {
+                if (opened != null) opened.close();
                 runOnUiThread(() -> {
-                    if (generation != ruleRebuildGeneration || isDestroyed()) return;
-                    Toast.makeText(this, "重建目录失败：" + failure.getMessage(),
+                    if (generation != indexGeneration || isDestroyed() || isFinishing()) return;
+                    finishIndexChange();
+                    Toast.makeText(this, (rebuild ? "重建目录失败：" : "切换编码失败：") + failure.getMessage(),
                             Toast.LENGTH_LONG).show();
                 });
                 return;
             }
+            final LazyChapterBook fresh = opened;
+            if (Thread.currentThread().isInterrupted()) { fresh.close(); return; }
             runOnUiThread(() -> {
-                if (isDestroyed() || isFinishing() || generation != ruleRebuildGeneration) {
-                    fresh.close(); // 过期/切书/关面板结果直接弃置，不写偏好也不改索引
+                if (isDestroyed() || isFinishing() || generation != indexGeneration) {
+                    fresh.close();
                     return;
                 }
+                finishIndexChange();
                 book.close();
                 book = fresh;
                 progressModel = new ProgressModel(book);
@@ -1598,14 +1620,28 @@ public final class ReaderActivity extends Activity {
                 pendingOffset = Math.max(0, Math.min(mapped[0], book.meta(chapter).charCount));
                 pendingBottom = oldBottom;
                 pendingLineFraction = oldFraction;
+                onSuccess.run();
                 build();
                 showChapter(pendingOffset, pendingBottom, pendingLineFraction);
-                if (onSuccess != null) onSuccess.run();
-                save();
-                Toast.makeText(this, "章节目录已按新规则重建，共 " + book.size() + " 章",
+                if (rebuild) save();
+                Toast.makeText(this, rebuild ? "章节目录已按新规则重建，共 " + book.size() + " 章"
+                                : "已按 " + encodingModeLabel() + " 重新打开，仍在原位置",
                         Toast.LENGTH_SHORT).show();
+                warnUnavailableRule(rule);
             });
         });
+    }
+
+    private void finishIndexChange() {
+        indexFuture = null;
+        if (indexDialog != null) indexDialog.dismiss();
+        indexDialog = null;
+    }
+
+    private void cancelIndexChange() {
+        indexGeneration++;
+        if (indexFuture != null) indexFuture.cancel(true);
+        finishIndexChange();
     }
 
     private void addHighlightFromSelection(boolean withNote) {
@@ -2698,6 +2734,9 @@ public final class ReaderActivity extends Activity {
     @Override protected void onDestroy() {
         searchGeneration++;
         if(searchFuture!=null)searchFuture.cancel(true);
+        cancelRulePreview();
+        cancelIndexChange();
+        rulePreviewWorker.shutdownNow();
         worker.shutdownNow();
         if (onlineFetcher != null) onlineFetcher.shutdown();
         autoHandler.removeCallbacks(autoTurnTask);

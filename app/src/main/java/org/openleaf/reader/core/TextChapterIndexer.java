@@ -5,9 +5,11 @@ import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.FilterReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.InterruptedIOException;
 import java.io.Reader;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
@@ -94,6 +96,7 @@ public final class TextChapterIndexer {
      */
     public static Result index(File file, File cacheDir, ChapterRule rule, Charset override,
                                long matchBudgetMs) throws Exception {
+        checkCancelled();
         final ChapterRule effective = rule == null ? ChapterRule.conservative() : rule;
         if (file == null || !file.isFile() || !file.canRead()) throw new IOException("电子书文件不存在或不可读取");
         if (file.length() > BookParser.MAX_IMPORT_BYTES)
@@ -143,7 +146,7 @@ public final class TextChapterIndexer {
         char[] buffer = new char[16384];
         try (Reader reader = new InputStreamReader(new FileInputStream(file), charset.newDecoder()
                 .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT))) {
-            while (reader.read(buffer) != -1) { /* 只做校验，不保留内容 */ }
+            do { checkCancelled(); } while (reader.read(buffer) != -1);
         }
     }
 
@@ -159,10 +162,19 @@ public final class TextChapterIndexer {
         try (InputStream raw = new FileInputStream(file)) {
             for (int i = 0; i < skip; i++) if (raw.read() < 0) throw new IOException("TXT 编码标记不完整");
             try (Reader reader = new InputStreamReader(raw, charset)) {
-                BufferedReader lines = new BufferedReader(reader, 16384);
+                BufferedReader lines = new BufferedReader(new FilterReader(reader) {
+                    @Override public int read(char[] buffer, int offset, int count) throws IOException {
+                        checkCancelled();
+                        return super.read(buffer, offset, count);
+                    }
+                }, 16384);
                 ChapterWriter writer = new ChapterWriter(out, chapters, bookTitle, rule, matchBudgetMs);
                 String line;
-                while ((line = lines.readLine()) != null) writer.consume(line);
+                while ((line = lines.readLine()) != null) {
+                    checkCancelled();
+                    writer.consume(line);
+                }
+                checkCancelled();
                 writer.finish();
             }
         }
@@ -203,6 +215,7 @@ public final class TextChapterIndexer {
      * 不建索引、不落缓存、不改变任何索引语义。UI 用它替换「旧索引缓存 head」作为样本。
      */
     public static String readSample(File file, Charset override, int maxChars) throws IOException {
+        checkCancelled();
         if (file == null || !file.isFile() || !file.canRead() || maxChars <= 0) return "";
         Charset charset = override != null ? override : detectCharset(file);
         int skip = bomSkip(file, override != null, charset);
@@ -212,13 +225,19 @@ public final class TextChapterIndexer {
             try (Reader reader = new InputStreamReader(raw, charset)) {
                 char[] buffer = new char[Math.min(maxChars, 8192)];
                 int read;
-                while (sample.length() < maxChars
-                        && (read = reader.read(buffer, 0, Math.min(buffer.length, maxChars - sample.length()))) > 0) {
+                while (sample.length() < maxChars) {
+                    checkCancelled();
+                    read = reader.read(buffer, 0, Math.min(buffer.length, maxChars - sample.length()));
+                    if (read <= 0) break;
                     sample.append(buffer, 0, read);
                 }
             }
         }
         return sample.toString();
+    }
+
+    private static void checkCancelled() throws InterruptedIOException {
+        if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("chapter scan cancelled");
     }
 
     /** 章节写出器：有界缓冲（单章超过上限即切分），标题处结算上一章。 */

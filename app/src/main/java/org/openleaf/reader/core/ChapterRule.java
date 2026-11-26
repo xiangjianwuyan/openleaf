@@ -3,6 +3,7 @@ package org.openleaf.reader.core;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -31,6 +32,7 @@ public final class ChapterRule {
     private static final int MAX_LINE_CODEPOINTS = 200;
     /** 自定义正则文本长度上限，防止误粘贴整篇文章。 */
     private static final int MAX_REGEX_CHARS = 512;
+    private static final boolean REGEX_READS_CHAR_SEQUENCE = regexReadsCharSequence();
 
     /**
      * 预览结果：总命中行数、保守档基线命中行数、扩展档新增行数与示例标题。
@@ -77,6 +79,7 @@ public final class ChapterRule {
         }
 
         private void checkDeadline() {
+            checkCancelled();
             if (deadlineNanos != Long.MAX_VALUE && System.nanoTime() - deadlineNanos >= 0) {
                 throw new RegexBudgetExceeded();
             }
@@ -148,11 +151,11 @@ public final class ChapterRule {
         Mode resolved = mode == null ? Mode.CONSERVATIVE : mode;
         String regex = customRegex == null ? "" : customRegex;
         Pattern pattern = null;
-        if (resolved == Mode.CUSTOM && !regex.trim().isEmpty()) {
+        if (resolved == Mode.CUSTOM && regexInputError(regex) == null) {
             try {
                 pattern = Pattern.compile(regex);
-            } catch (RuntimeException invalid) {
-                pattern = null; // 绝不把非法正则传给判定路径（含 PatternSyntaxException）
+            } catch (PatternSyntaxException | StackOverflowError invalid) {
+                // 旧配置也走同一校验，非法/不安全的正则降级为保守判定。
             }
         }
         return new ChapterRule(resolved, regex, pattern);
@@ -161,20 +164,115 @@ public final class ChapterRule {
     public Mode mode() { return mode; }
     public String customRegex() { return customRegex; }
     public boolean isCustom() { return mode == Mode.CUSTOM; }
+    public boolean hasUnavailableCustomPattern() { return isCustom() && compiled == null; }
 
-    /**
-     * 校验用户正则。返回 {@code null} 表示合法，否则返回可直接展示的中文错误文案。
-     */
+    /** 校验用户正则。返回 null 表示合法，否则给出可直接展示的中文提示。 */
     public String validateRegex(String regex) {
-        if (regex == null || regex.trim().isEmpty()) return "正则表达式不能为空";
-        if (regex.length() > MAX_REGEX_CHARS) return "正则表达式过长（最多 " + MAX_REGEX_CHARS + " 字符）";
+        String error = regexInputError(regex);
+        if (error != null) return error;
         try {
             Pattern.compile(regex);
             return null;
         } catch (PatternSyntaxException invalid) {
-            String reason = invalid.getDescription();
-            return "正则表达式不合法：" + (reason == null || reason.isEmpty() ? "语法错误" : reason);
+            return "正则表达式不合法：" + invalid.getDescription();
+        } catch (StackOverflowError tooDeep) {
+            return "正则表达式嵌套过深";
         }
+    }
+
+    private static String regexInputError(String regex) {
+        if (regex == null || regex.trim().isEmpty()) return "正则表达式不能为空";
+        if (regex.length() > MAX_REGEX_CHARS) return "正则表达式过长（最多 " + MAX_REGEX_CHARS + " 字符）";
+        if (!REGEX_READS_CHAR_SEQUENCE && !isNativeSafeRegex(regex)) {
+            return "Android 仅支持简单正则：可用字符类、^/$ 和 |，每个分支最多一个可变重复；不支持分组或引用";
+        }
+        return null;
+    }
+
+    private static void checkCancelled() {
+        if (Thread.currentThread().isInterrupted()) throw new CancellationException("chapter matching cancelled");
+    }
+
+    private static boolean regexReadsCharSequence() {
+        // Android 的 ICU Matcher 在 reset() 时把 CharSequence 转成 String；探测实际匹配阶段。
+        final boolean[] read = {false};
+        CharSequence probe = new CharSequence() {
+            @Override public int length() { return 1; }
+            @Override public char charAt(int index) { read[0] = true; return 'x'; }
+            @Override public CharSequence subSequence(int start, int end) { return "x".substring(start, end); }
+            @Override public String toString() { return "x"; }
+        };
+        java.util.regex.Matcher matcher = Pattern.compile("x").matcher(probe);
+        read[0] = false;
+        matcher.find();
+        return read[0];
+    }
+
+    /**
+     * ICU executes on a flattened string and cannot be interrupted via charAt. Its fallback syntax
+     * allows only flat alternatives of single-character atoms, with at most one variable repeat
+     * per branch. Fixed repeats are capped at the input length. Thus there is no combinatorial
+     * backtracking. Reject rather than silently changing the meaning of a complex pattern.
+     */
+    private static boolean isNativeSafeRegex(String regex) {
+        boolean atom = false, inClass = false, variable = false;
+        for (int i = 0; i < regex.length(); i++) {
+            char c = regex.charAt(i);
+            if (c == '\\') {
+                if (++i == regex.length()) return false;
+                char escaped = regex.charAt(i);
+                if (escaped == 'p' || escaped == 'P') {
+                    if (++i == regex.length() || regex.charAt(i) != '{') return false;
+                    int end = regex.indexOf('}', i + 1);
+                    if (end < 0) return false;
+                    // Only property names, not escaped syntax or nested expressions.
+                    for (int j = i + 1; j < end; j++) {
+                        char ch = regex.charAt(j);
+                        if (!Character.isLetterOrDigit(ch) && ch != '_' && ch != '=' && ch != '-') return false;
+                    }
+                    i = end;
+                } else if ("dDsSwWnrtf\\.^$|?*+()[]{}-".indexOf(escaped) < 0) {
+                    return false;
+                }
+                if (!inClass) atom = true;
+                continue;
+            }
+            if (inClass) {
+                if (c == '[') return false;
+                if (c == ']') { inClass = false; atom = true; }
+                continue;
+            }
+            if (c == '[') { inClass = true; atom = false; continue; }
+            if (c == '|' || c == '^' || c == '$') {
+                if (c == '|') variable = false;
+                atom = false;
+                continue;
+            }
+            if (c == '(' || c == ')' || c == ']' || c == '}') return false;
+            if (c == '*' || c == '+' || c == '?' || c == '{') {
+                if (!atom) return false;
+                boolean fixed = false;
+                if (c == '{') {
+                    int end = regex.indexOf('}', i + 1);
+                    if (end < 0 || end - i > 8) return false;
+                    String count = regex.substring(i + 1, end);
+                    if (!count.matches("[0-9]{1,3}(?:,[0-9]{0,3})?")) return false;
+                    int comma = count.indexOf(',');
+                    int min = Integer.parseInt(comma < 0 ? count : count.substring(0, comma));
+                    int max = comma < 0 ? min : comma == count.length() - 1
+                            ? MAX_LINE_CODEPOINTS : Integer.parseInt(count.substring(comma + 1));
+                    if (min > max || max > MAX_LINE_CODEPOINTS) return false;
+                    fixed = min == max;
+                    i = end;
+                }
+                if (!fixed && variable) return false;
+                variable |= !fixed;
+                atom = false;
+                continue;
+            }
+            atom = true;
+        }
+        return !inClass;
     }
 
     /**
@@ -184,7 +282,7 @@ public final class ChapterRule {
      * @param isolated 该行前后均为空行（或处于书边界）时为 true，与索引器口径一致
      */
     public boolean isHeading(String line, boolean isolated) {
-        return isHeading(line, isolated, 0L);
+        return isHeading(line, isolated, TextChapterIndexer.DEFAULT_RULE_MATCH_BUDGET_MS);
     }
 
     /**
@@ -193,6 +291,7 @@ public final class ChapterRule {
      * 预算耗尽时本行按「非标题」处理，保守判定仍然有效，不会中断整本书索引。
      */
     public boolean isHeading(String line, boolean isolated, long budgetMs) {
+        if (budgetMs > 0) checkCancelled();
         if (line == null || line.isEmpty()) return false;
         // 保守档与 0.26.0 逐字一致：原样委托，不做任何预处理。
         if (TextChapterHeadings.isHeading(line, isolated)) return true;
@@ -206,7 +305,7 @@ public final class ChapterRule {
             if (compiled == null) return false;
             try {
                 return compiled.matcher(new BudgetCharSequence(value, budgetMs)).find();
-            } catch (RegexBudgetExceeded exhausted) {
+            } catch (RegexBudgetExceeded | StackOverflowError exhausted) {
                 return false; // 灾难性回溯在匹配执行路径上被中断，本行不当标题
             }
         }
@@ -228,17 +327,7 @@ public final class ChapterRule {
      * 返回命中行数。maxLines <= 0 表示不限制行数。
      */
     public int previewMatchCount(String sampleText, int maxLines) {
-        if (sampleText == null || sampleText.isEmpty()) return 0;
-        String normalized = sampleText.replace("\r\n", "\n").replace('\r', '\n');
-        String[] lines = normalized.split("\n", -1);
-        int limit = maxLines <= 0 ? lines.length : Math.min(maxLines, lines.length);
-        int matches = 0;
-        for (int i = 0; i < limit; i++) {
-            boolean previousBlank = i == 0 || isBlank(lines[i - 1]);
-            boolean nextBlank = i + 1 >= lines.length || isBlank(lines[i + 1]);
-            if (isHeading(lines[i], previousBlank && nextBlank)) matches++;
-        }
-        return matches;
+        return preview(sampleText, maxLines, 0).totalMatches;
     }
 
     /**
@@ -252,23 +341,34 @@ public final class ChapterRule {
         String normalized = sampleText.replace("\r\n", "\n").replace('\r', '\n');
         String[] lines = normalized.split("\n", -1);
         int limit = maxLines <= 0 ? lines.length : Math.min(maxLines, lines.length);
-        ChapterRule baseline = ChapterRule.conservative();
         int total = 0;
         int conservative = 0;
+        char fenceMarker = 0;
+        int fenceWidth = 0;
         List<String> examples = new ArrayList<>();
+        boolean previousBlank = true;
         for (int i = 0; i < limit; i++) {
-            boolean previousBlank = i == 0 || isBlank(lines[i - 1]);
-            boolean nextBlank = i + 1 >= lines.length || isBlank(lines[i + 1]);
-            boolean isolated = previousBlank && nextBlank;
-            boolean matched = isHeading(lines[i], isolated);
-            if (!matched) continue;
-            boolean base = baseline.isHeading(lines[i], isolated);
+            checkCancelled();
+            String line = indexTrim(lines[i]);
+            boolean isolated = previousBlank && (i + 1 >= lines.length || indexTrim(lines[i + 1]).isEmpty());
+            previousBlank = line.isEmpty();
+            // Mirror TextChapterIndexer.ChapterWriter's fence and pre-normalization length guards.
+            char marker = line.isEmpty() ? 0 : line.charAt(0);
+            int width = 0;
+            if (marker == '`' || marker == '~') {
+                while (width < line.length() && line.charAt(width) == marker) width++;
+            }
+            if (width >= 3) {
+                if (fenceMarker == 0) { fenceMarker = marker; fenceWidth = width; }
+                else if (fenceMarker == marker && width >= fenceWidth && width == line.length()) fenceMarker = 0;
+                continue;
+            }
+            if (fenceMarker != 0 || line.length() > 512) continue;
+            boolean base = TextChapterHeadings.isHeading(line, isolated);
+            if (!base && !isHeading(line, isolated, TextChapterIndexer.DEFAULT_RULE_MATCH_BUDGET_MS)) continue;
             total++;
             if (base) conservative++;
-            if (examples.size() < Math.max(0, maxExamples)) {
-                String title = trim(lines[i]);
-                examples.add(title.isEmpty() ? "（空标题行）" : boundedExample(title));
-            }
+            if (examples.size() < Math.max(0, maxExamples)) examples.add(boundedExample(line));
         }
         return new Preview(total, conservative, total - conservative, examples);
     }
@@ -277,14 +377,15 @@ public final class ChapterRule {
         return title.length() <= 60 ? title : title.substring(0, 59) + "…";
     }
 
-    private static boolean isBlank(String line) {
-        if (line == null) return true;
-        for (int i = 0; i < line.length();) {
-            int cp = line.codePointAt(i);
-            if (!Character.isWhitespace(cp) && !Character.isSpaceChar(cp) && cp != '\uFEFF') return false;
-            i += Character.charCount(cp);
-        }
-        return true;
+    private static String indexTrim(String line) {
+        int start = 0, end = line.length();
+        while (start < end && indexWhitespace(line.charAt(start))) start++;
+        while (end > start && indexWhitespace(line.charAt(end - 1))) end--;
+        return line.substring(start, end);
+    }
+
+    private static boolean indexWhitespace(char c) {
+        return Character.isWhitespace(c) || c == '\u00a0' || c == '\ufeff';
     }
 
     private static String trim(String value) {
