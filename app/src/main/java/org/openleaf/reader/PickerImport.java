@@ -115,7 +115,9 @@ final class PickerImport {
                 || (lower.contains("超过") && lower.contains("上限")) || lower.contains("toolarge")) {
             return "「超限」" + detail;
         }
-        if (lower.contains("请选择 txt") || lower.contains("validatepdf") || lower.contains("validateforimport")
+        if (lower.contains("请选择 txt") || lower.contains("pdf") || lower.contains("不是有效的")
+                || lower.contains("spine") || lower.contains("opf") || lower.contains("container.xml")
+                || lower.contains("manifest") || lower.contains("编码") || lower.contains("bom")
                 || lower.contains("格式") || lower.contains("解析") || lower.contains("drm")
                 || lower.contains("解码") || lower.contains("不支持的电子书")) {
             return "「格式或解析」" + detail;
