@@ -101,7 +101,16 @@ public final class FolderImportActivity extends Activity {
         settingsDialog=new AlertDialog.Builder(this).setTitle("导入设置").setView(settingsScroll)
                 .setPositiveButton("完成",(d,w)->saveSettings()).create();
         filter=new Spinner(this); String[] filters={"全部格式","TXT","EPUB","PDF"}; filter.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,filters)); filter.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> p){} public void onItemSelected(android.widget.AdapterView<?> p,View v,int pos,long id){if(adapter!=null){adapter.filter=pos==0?"":filters[pos].toLowerCase(Locale.ROOT);adapter.refresh();renderSummary();}}}); body.addView(filter); body.addView(Ui.text(this,"筛选只改变显示；导入全部已勾选文件。",12,Ui.MUTED)); Ui.gap(body,6);
-        LinearLayout select=Ui.row(this); select.addView(Ui.button(this,"全选",()->setAll(true)),Ui.weight()); select.addView(Ui.button(this,"全不选",()->setAll(false)),Ui.weight()); body.addView(select); Ui.gap(body,6);
+        // P1-1：可见集合与全局集合分别给按钮，避免两个含义共用一个「全选」。窄屏拆成两行，
+        // 简短标签 + contentDescription 兼顾布局与 TalkBack。
+        LinearLayout selectVisible=Ui.row(this);
+        selectVisible.addView(Ui.button(this,"全选当前",()->setAll(true,true),"全选当前结果：只勾选当前筛选可见的候选"),Ui.weight());
+        selectVisible.addView(Ui.button(this,"取消当前",()->setAll(false,true),"取消当前结果：只取消当前筛选可见的候选"),Ui.weight());
+        body.addView(selectVisible); Ui.gap(body,4);
+        LinearLayout selectAll=Ui.row(this);
+        selectAll.addView(Ui.button(this,"全选全部",()->setAll(true,false),"选中全部文件：勾选所有候选（含被筛选隐藏的候选），跳过 0 字节文件"),Ui.weight());
+        selectAll.addView(Ui.button(this,"清空全部",()->setAll(false,false),"清空全部选择：取消所有候选的勾选（含被筛选隐藏的候选）"),Ui.weight());
+        body.addView(selectAll); Ui.gap(body,6);
         summary=Ui.text(this,"尚未扫描",13,Ui.MUTED); body.addView(summary); status=Ui.text(this,"",13,Ui.GREEN); status.setMaxLines(2);status.setEllipsize(android.text.TextUtils.TruncateAt.END);body.addView(status);
         importProgress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);importProgress.setMax(1000);importProgress.setVisibility(View.GONE);importProgress.setContentDescription("当前文件导入进度");body.addView(importProgress,new LinearLayout.LayoutParams(-1,Ui.dp(this,6)));
         errors=Ui.text(this,"",12,Ui.MUTED); errors.setMaxLines(3); errors.setEllipsize(android.text.TextUtils.TruncateAt.END); errors.setOnClickListener(v->{if(task.errorText().length()>0)new AlertDialog.Builder(this).setTitle("扫描与导入详情").setMessage(task.errorText()).setPositiveButton("知道了",null).show();}); body.addView(errors); Ui.gap(body,4);
@@ -315,6 +324,13 @@ public final class FolderImportActivity extends Activity {
         view.addView(scroll, new LinearLayout.LayoutParams(-1, Ui.dp(this, 260)));
         Ui.gap(view, 6);
         view.addView(Ui.text(this, "同一份明细也记录在「任务中心」，重启后仍可查看。", 12, Ui.MUTED));
+        Ui.gap(view, 6);
+        // 结果页只给入口，不直接调 jobs.retryFailed()：重试仍走任务中心既有的
+        // JobRetryRunner.start(Context, String) 链路；补弹路径同样经过 showFailureDetail。
+        view.addView(Ui.button(this, "到任务中心重试",
+                () -> startActivity(new Intent(this, JobsActivity.class)),
+                "到任务中心重试：打开任务中心，使用重试失败项入口继续导入失败的文件"),
+                new LinearLayout.LayoutParams(-1, Ui.dp(this, 48)));
         resultDialog = new AlertDialog.Builder(this).setTitle(title).setView(view).setCancelable(false)
                 .setPositiveButton("复制清单", (d, w) -> { copyReport(); finish(); })
                 .setNeutralButton("另存为 txt", (d, w) -> saveReport())
@@ -374,11 +390,14 @@ public final class FolderImportActivity extends Activity {
         finish();
     }
 
-    private void setAll(boolean checked){
+    private void setAll(boolean checked){setAll(checked,false);}
+    /** visibleOnly=true 只改当前筛选可见集合；false 改全部候选（含隐藏项）。筛选本身不清空选择。 */
+    private void setAll(boolean checked,boolean visibleOnly){
         if(task.running()){toast("请等待当前任务结束后修改选择");return;}
         int skipped=0;
         synchronized(task.dataLock){
             for(DirectoryScanner.Candidate c:task.candidates){
+                if(visibleOnly&&adapter!=null&&!adapter.matches(c))continue;
                 // 空文件（0 字节）导入必然失败：全选也不勾上，否则等于没修默认勾选。
                 // 大小未知（-1）保留勾选——用户按下「全选」是明确意图，导入时会按上限复核。
                 if(checked&&c.size==0){skipped++;continue;}
@@ -414,12 +433,17 @@ public final class FolderImportActivity extends Activity {
     private void renderSummary(){
         if(summary==null)return;
         if(heading!=null){int found=task.candidateCount();heading.setText(found>0?"扫描结果（"+found+"）":"批量导入文件夹");}
-        int count=0,unknown=0,visible=0;long size=0;
+        int count=0,unknown=0,visible=0,hidden=0;long size=0;
         for(DirectoryScanner.Candidate c:task.snapshotCandidates()){
-            if(adapter!=null&&adapter.matches(c))visible++;
-            if(task.isSelected(c)){count++;if(c.size<0)unknown++;else size+=c.size;}
+            boolean matches=adapter==null||adapter.matches(c);
+            if(matches)visible++;
+            if(task.isSelected(c)){
+                count++;
+                if(!matches)hidden++; // 被当前筛选隐藏、但仍会被提交的候选
+                if(c.size<0)unknown++;else size+=c.size;
+            }
         }
-        summary.setText("发现 "+task.candidateCount()+" 项 · 显示 "+visible+" 项 · 选中 "+count+" 项 · "+sizeText(size)
+        summary.setText("发现 "+task.candidateCount()+" · 当前筛选 "+visible+" · 已选 "+count+"（含隐藏 "+hidden+"）· "+sizeText(size)
                 +(unknown==0?"":"（另 "+unknown+" 项大小未知）")
                 +"\n已添加 "+task.added+" · 重复 "+task.duplicates+" · 失败 "+task.failed);
         if(importButton!=null){
@@ -478,7 +502,7 @@ public final class FolderImportActivity extends Activity {
                         itemBook=r.book==null?null:r.book.id;
                         if(r.duplicate){duplicates++;itemState=org.openleaf.reader.core.ContentContracts.ItemState.DUPLICATE;}
                         else{added++;itemState=org.openleaf.reader.core.ContentContracts.ItemState.DONE;}
-                        jobSeq[0]++;}catch(android.os.OperationCanceledException e){if(cancelled)break;failed++;itemError="操作被取消";itemState=org.openleaf.reader.core.ContentContracts.ItemState.FAILED;addError(c.relativePath+"："+itemError);jobSeq[0]++;}catch(Exception e){if(cancelled)break;failed++;itemError=msg(e);itemState=org.openleaf.reader.core.ContentContracts.ItemState.FAILED;addError(c.relativePath+"："+itemError);jobSeq[0]++;}processed++;try{jobRepo.checkpoint(jobId,itemSeq,itemState,itemBook,itemError,cancelled?org.openleaf.reader.core.ContentContracts.JobState.PAUSED:org.openleaf.reader.core.ContentContracts.JobState.RUNNING,processed,added,duplicates,failed);}catch(RuntimeException bookkeeping){android.util.Log.w("OpenLeafImport","checkpoint failed, book already imported: "+c.relativePath,bookkeeping);/* 记账失败静默降级：书已入库，不能 failed++（否则结果页"失败数"与明细条数对不上），也不进用户可见明细。任务中心该项可能停留旧状态，但书架结果是准的。 */}importPhase=null;notifyBatch();}}catch(android.os.OperationCanceledException e){if(!cancelled)addError("导入被系统取消");}catch(Exception e){if(!cancelled)addError("准备书库失败："+msg(e));}finally{activeSignal=null;importing=false;importPhase=null;current=cancelled?"导入已取消":"导入完成";if(jobId!=null){try{jobRepo.updateState(jobId,cancelled?org.openleaf.reader.core.ContentContracts.JobState.CANCELLED:org.openleaf.reader.core.ContentContracts.JobState.DONE,processed,added,duplicates,failed);}catch(RuntimeException updateFailure){android.util.Log.w("OpenLeafImport","updateState failed",updateFailure);/* 计数落盘失败不得阻断 notifyFinal()/finished()：否则导入完成却永远不出结果页，线上零线索 */}}notifyFinal();if(!cancelled){TaskListener finished=attached;if(finished!=null)finished.finished();}}});}
+                        jobSeq[0]++;}catch(android.os.OperationCanceledException e){if(cancelled)break;failed++;itemError="操作被取消";itemState=org.openleaf.reader.core.ContentContracts.ItemState.FAILED;addError(c.relativePath+"："+itemError);jobSeq[0]++;}catch(Exception e){if(cancelled)break;failed++;itemError=PickerImport.message(e);itemState=org.openleaf.reader.core.ContentContracts.ItemState.FAILED;addError(c.relativePath+"："+itemError);jobSeq[0]++;}processed++;try{jobRepo.checkpoint(jobId,itemSeq,itemState,itemBook,itemError,cancelled?org.openleaf.reader.core.ContentContracts.JobState.PAUSED:org.openleaf.reader.core.ContentContracts.JobState.RUNNING,processed,added,duplicates,failed);}catch(RuntimeException bookkeeping){android.util.Log.w("OpenLeafImport","checkpoint failed, book already imported: "+c.relativePath,bookkeeping);/* 记账失败静默降级：书已入库，不能 failed++（否则结果页"失败数"与明细条数对不上），也不进用户可见明细。任务中心该项可能停留旧状态，但书架结果是准的。 */}importPhase=null;notifyBatch();}}catch(android.os.OperationCanceledException e){if(!cancelled)addError("导入被系统取消");}catch(Exception e){if(!cancelled)addError("准备书库失败："+msg(e));}finally{activeSignal=null;importing=false;importPhase=null;current=cancelled?"导入已取消":"导入完成";if(jobId!=null){try{jobRepo.updateState(jobId,cancelled?org.openleaf.reader.core.ContentContracts.JobState.CANCELLED:org.openleaf.reader.core.ContentContracts.JobState.DONE,processed,added,duplicates,failed);}catch(RuntimeException updateFailure){android.util.Log.w("OpenLeafImport","updateState failed",updateFailure);/* 计数落盘失败不得阻断 notifyFinal()/finished()：否则导入完成却永远不出结果页，线上零线索 */}}notifyFinal();if(!cancelled){TaskListener finished=attached;if(finished!=null)finished.finished();}}});}
         void cancel(){
             if(cancelled||!running())return;
             cancelled=true;
@@ -546,6 +570,25 @@ public final class FolderImportActivity extends Activity {
         public int getCount(){return visible.size();}
         public Object getItem(int p){return p>=0&&p<visible.size()?visible.get(p):null;}
         public long getItemId(int p){return p;}
-        public View getView(int p,View convert,android.view.ViewGroup parent){LinearLayout row=convert instanceof LinearLayout?(LinearLayout)convert:Ui.row(context);if(convert==null){CheckBox box=new CheckBox(context);box.setTag("check");row.addView(box);LinearLayout info=Ui.column(context);info.setTag("info");row.addView(info,new LinearLayout.LayoutParams(0,-2,1));Ui.pad(row,4);}CheckBox box=(CheckBox)row.findViewWithTag("check");LinearLayout info=(LinearLayout)row.findViewWithTag("info");DirectoryScanner.Candidate c=(DirectoryScanner.Candidate)getItem(p);if(c==null)return row;info.removeAllViews();info.addView(Ui.text(context,c.name,15,Ui.INK));String detail=c.relativePath+"  ·  "+c.format.toUpperCase(Locale.ROOT)+"  ·  "+sizeText(c.size);if(c.size==0)detail+="\n空文件（0 字节），导入必然失败，已默认不勾选";else if(c.size<0)detail+="\n大小未知（文件提供器未返回大小），已默认不勾选；可手动勾选，导入时按上限复核";else if(c.size>BookStore.importLimit(c.format))detail+="\n扫描大小超出格式上限；可手动勾选尝试，导入时复核";else if(c.size>task.maxBytes)detail+="\n超出默认勾选阈值；可手动勾选";info.addView(Ui.text(context,detail,12,Ui.MUTED));box.setOnCheckedChangeListener(null);box.setChecked(task.isSelected(c));box.setEnabled(!task.running());box.setOnCheckedChangeListener((button,checked)->{synchronized(task.dataLock){task.selected.put(c.uri.toString(),checked);}renderSummary();});return row;}
+        public View getView(int p,View convert,android.view.ViewGroup parent){
+            LinearLayout row=convert instanceof LinearLayout?(LinearLayout)convert:Ui.row(context);
+            if(convert==null){CheckBox box=new CheckBox(context);box.setTag("check");row.addView(box);LinearLayout info=Ui.column(context);info.setTag("info");row.addView(info,new LinearLayout.LayoutParams(0,-2,1));Ui.pad(row,4);}
+            CheckBox box=(CheckBox)row.findViewWithTag("check");LinearLayout info=(LinearLayout)row.findViewWithTag("info");
+            DirectoryScanner.Candidate c=(DirectoryScanner.Candidate)getItem(p);if(c==null)return row;
+            info.removeAllViews();info.addView(Ui.text(context,c.name,15,Ui.INK));
+            String detail=c.relativePath+"  ·  "+c.format.toUpperCase(Locale.ROOT)+"  ·  "+sizeText(c.size);
+            // P1-1：副文案前给明确状态词，复用既有扫描字段，不改 Candidate 数据结构。
+            String statusWord,statusDetail;
+            if(c.size==0){statusWord="空文件";statusDetail="空文件（0 字节），导入必然失败，已默认不勾选";}
+            else if(c.size<0){statusWord="大小未知";statusDetail="大小未知（文件提供器未返回大小），已默认不勾选；可手动勾选，导入时按上限复核";}
+            else if(c.size>BookStore.importLimit(c.format)){statusWord="超过格式上限";statusDetail="扫描大小超出格式上限；可手动勾选尝试，导入时复核";}
+            else if(c.size>task.maxBytes){statusWord="超过默认阈值";statusDetail="超出默认勾选阈值；可手动勾选";}
+            else{statusWord="可导入";statusDetail="符合当前格式与大小规则";}
+            detail+="\n"+statusWord+"："+statusDetail;
+            info.addView(Ui.text(context,detail,12,Ui.MUTED));
+            box.setOnCheckedChangeListener(null);box.setChecked(task.isSelected(c));box.setEnabled(!task.running());
+            box.setOnCheckedChangeListener((button,checked)->{synchronized(task.dataLock){task.selected.put(c.uri.toString(),checked);}renderSummary();});
+            return row;
+        }
     }
 }
