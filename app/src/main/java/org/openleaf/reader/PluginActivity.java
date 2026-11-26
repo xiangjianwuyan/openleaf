@@ -5,6 +5,8 @@ import android.app.AlertDialog;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.res.AssetFileDescriptor;
+import android.content.res.ColorStateList;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.CancellationSignal;
@@ -40,26 +42,43 @@ public final class PluginActivity extends Activity {
         store = new PluginStore(this);
         if (state != null) awaitingRunId = state.getString("awaiting_run_id");
         LinearLayout root = Ui.column(this);
+        LinearLayout headerBand = Ui.column(this);
+        headerBand.setBackgroundColor(PluginScreen.SURFACE);
         LinearLayout header = Ui.row(this);
-        Ui.pad(header, 10);
-        header.addView(Ui.button(this, "返回", this::finish, "返回上一页"));
-        header.addView(Ui.title(this, "应用插件", 22), Ui.weight());
-        root.addView(header);
+        header.setPadding(Ui.dp(this, 16), Ui.dp(this, 8), Ui.dp(this, 16), Ui.dp(this, 8));
+        header.addView(PluginScreen.button(this, "返回", "返回上一页", PluginScreen.PAPER, PluginScreen.SAGE, this::finish));
+        TextView title = PluginScreen.heading(this, "应用插件", 22);
+        LinearLayout.LayoutParams titleParams = Ui.weight();
+        titleParams.setMarginStart(Ui.dp(this, 14));
+        header.addView(title, titleParams);
+        PluginScreen.center(headerBand, header, 700);
+        View divider = new View(this);
+        divider.setBackgroundColor(PluginScreen.EDGE);
+        headerBand.addView(divider, new LinearLayout.LayoutParams(-1, Ui.dp(this, 1)));
+        root.addView(headerBand);
 
         ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        LinearLayout content = Ui.column(this);
         LinearLayout body = Ui.column(this);
         Ui.pad(body, 16);
-        body.addView(Ui.text(this, "插件只提供声明式文本工具。只有你主动运行并选择文档后，才读取该文档；不会修改原文件或书库。", 15, Ui.MUTED));
-        Ui.gap(body, 12);
-        source = Ui.primary(this, "插件源", this::chooseSource);
-        body.addView(source);
+        LinearLayout intro = PluginScreen.card(this, PluginScreen.SOFT);
+        intro.addView(PluginScreen.heading(this, "本地文本工具", 19));
+        Ui.gap(intro, 4);
+        intro.addView(PluginScreen.text(this, "插件仅在你主动运行并选择文档后读取文件，不会修改原件或书库。", 14, PluginScreen.INK));
+        Ui.gap(intro, 12);
+        source = PluginScreen.button(this, "插件源", null, PluginScreen.SAGE, Color.WHITE, this::chooseSource);
+        intro.addView(source, new LinearLayout.LayoutParams(-1, -2));
+        body.addView(intro);
         activityStatus = Ui.column(this);
+        activityStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         body.addView(activityStatus);
         installed = Ui.column(this);
         body.addView(installed);
-        scroll.addView(body);
+        PluginScreen.center(content, body, 700);
+        scroll.addView(content);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        Ui.mount(this, root);
+        PluginScreen.mount(this, root);
         refresh();
     }
 
@@ -76,14 +95,33 @@ public final class PluginActivity extends Activity {
     }
 
     private void chooseSource() {
-        new AlertDialog.Builder(this).setTitle("插件源").setItems(new String[]{
-                "内置目录：添加官方样例", "本地 JSON：选择插件清单"
-        }, (dialog, which) -> {
-            if (which == 0) {
-                try { confirmInstall(PluginManifest.parse(PluginManifest.BUILTIN), PluginStore.Source.BUILTIN); }
-                catch (IOException e) { error("无法打开内置插件", e); }
-            } else pick(PICK_PLUGIN);
-        }).setNegativeButton("取消", null).show();
+        LinearLayout body = Ui.column(this);
+        body.addView(PluginScreen.text(this, "选择插件来源。查看用途和访问范围后，再确认安装。", 14, PluginScreen.MUTED));
+        Ui.gap(body, 12);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("插件源")
+                .setView(PluginScreen.dialogBody(this, body)).setNegativeButton("取消", null).create();
+        addSourceCard(body, "随应用提供", "内置目录", "离线预览内置「文本体检」样例，无需准备文件。",
+                "内置目录：添加官方样例", () -> {
+                    dialog.dismiss();
+                    try { confirmInstall(PluginManifest.parse(PluginManifest.BUILTIN), PluginStore.Source.BUILTIN); }
+                    catch (IOException e) { error("无法打开内置插件", e); }
+                });
+        Ui.gap(body, 10);
+        addSourceCard(body, "从设备导入", "本地 JSON", "用系统文件选择器导入声明式清单（最多 16 KiB），不执行脚本。",
+                "本地 JSON：选择插件清单", () -> { dialog.dismiss(); pick(PICK_PLUGIN); });
+        PluginScreen.show(dialog);
+    }
+
+    private void addSourceCard(LinearLayout body, String origin, String name, String purpose, String label, Runnable open) {
+        LinearLayout card = PluginScreen.card(this, PluginScreen.SURFACE);
+        card.addView(PluginScreen.state(this, origin, true));
+        Ui.gap(card, 6);
+        card.addView(PluginScreen.heading(this, name, 17));
+        card.addView(PluginScreen.text(this, purpose, 14, PluginScreen.MUTED));
+        Ui.gap(card, 8);
+        card.addView(PluginScreen.button(this, label, null, PluginScreen.SOFT, PluginScreen.SAGE, open),
+                new LinearLayout.LayoutParams(-1, -2));
+        body.addView(card);
     }
 
     private void pick(int request) {
@@ -147,12 +185,21 @@ public final class PluginActivity extends Activity {
         CancellationSignal current = new CancellationSignal();
         signal = current;
         source.setEnabled(false);
-        installed.removeAllViews();
-        activityStatus.addView(Ui.text(this, label, 15, Ui.MUTED));
+        installed.setVisibility(View.GONE);
+        Ui.gap(activityStatus, 12);
+        LinearLayout panel = PluginScreen.card(this, PluginScreen.SURFACE);
+        LinearLayout progress = Ui.row(this);
         ProgressBar spinner = new ProgressBar(this);
-        spinner.setContentDescription(label);
-        activityStatus.addView(spinner, new LinearLayout.LayoutParams(Ui.dp(this, 34), Ui.dp(this, 34)));
-        activityStatus.addView(Ui.button(this, "取消", this::cancelRead));
+        spinner.setIndeterminateTintList(ColorStateList.valueOf(PluginScreen.SAGE));
+        spinner.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        LinearLayout.LayoutParams indicator = new LinearLayout.LayoutParams(Ui.dp(this, 24), Ui.dp(this, 24));
+        indicator.setMarginEnd(Ui.dp(this, 12));
+        progress.addView(spinner, indicator);
+        progress.addView(PluginScreen.text(this, label, 14, PluginScreen.INK), Ui.weight());
+        panel.addView(progress);
+        Ui.gap(panel, 8);
+        panel.addView(PluginScreen.button(this, "取消", null, PluginScreen.PAPER, PluginScreen.SAGE, this::cancelRead));
+        activityStatus.addView(panel);
         task = worker.submit(() -> {
             try {
                 Runnable result = operation.read(current);
@@ -189,76 +236,128 @@ public final class PluginActivity extends Activity {
     }
 
     private void confirmInstall(PluginManifest manifest, PluginStore.Source origin) {
-        String details = "来源：" + origin.label + "\nID：" + manifest.id + "\n\n" + manifest.description
-                + "\n\n能力：只读文本体检（UTF-8 TXT / MD，最多 1 MiB）"
-                + "\n标题前缀：" + formatPrefixes(manifest.prefixes)
-                + "\n\n安装默认禁用。运行时需主动选择文档，不保存文件授权，不上传。";
-        new AlertDialog.Builder(this).setTitle("确认安装：" + manifest.name).setMessage(details)
+        LinearLayout body = Ui.column(this);
+        LinearLayout purpose = PluginScreen.card(this, PluginScreen.SURFACE);
+        purpose.addView(PluginScreen.state(this, "来源：" + origin.label, true));
+        Ui.gap(purpose, 8);
+        purpose.addView(PluginScreen.heading(this, "用途", 16));
+        purpose.addView(PluginScreen.text(this, manifest.description, 14, PluginScreen.INK));
+        Ui.gap(purpose, 6);
+        purpose.addView(PluginScreen.text(this, "ID：" + manifest.id, 13, PluginScreen.MUTED));
+        purpose.addView(PluginScreen.text(this, "标题前缀：" + formatPrefixes(manifest.prefixes), 13, PluginScreen.MUTED));
+        body.addView(purpose);
+        Ui.gap(body, 10);
+        LinearLayout access = PluginScreen.card(this, PluginScreen.SOFT);
+        access.addView(PluginScreen.heading(this, "访问范围", 16));
+        access.addView(PluginScreen.text(this, "只读你主动选择的 UTF-8 TXT / MD（最多 1 MiB）。不保留文件授权、不写入、不上传。", 14, PluginScreen.INK));
+        Ui.gap(access, 6);
+        access.addView(PluginScreen.text(this, "安装默认禁用，需手动启用后才能运行。", 13, PluginScreen.MUTED));
+        body.addView(access);
+        PluginScreen.show(new AlertDialog.Builder(this).setTitle("确认安装：" + manifest.name)
+                .setView(PluginScreen.dialogBody(this, body))
                 .setNegativeButton("取消", null).setPositiveButton("安装（默认禁用）", (dialog, which) -> {
                     try { store.install(manifest, origin); refresh(); }
                     catch (IOException e) { error("未安装插件", e); }
-                }).show();
+                }));
     }
 
     private void refresh() {
+        installed.setVisibility(View.VISIBLE);
         installed.removeAllViews();
-        Ui.gap(installed, 16);
-        TextView heading = Ui.title(this, "已安装插件", 18);
-        if (android.os.Build.VERSION.SDK_INT >= 28) heading.setAccessibilityHeading(true);
-        installed.addView(heading);
+        Ui.gap(installed, 20);
+        installed.addView(PluginScreen.heading(this, "已安装插件", 18));
+        Ui.gap(installed, 4);
         try {
             List<PluginStore.Installed> entries = store.list();
-            if (entries.isEmpty()) installed.addView(Ui.text(this, "还没有插件。可从插件源添加内置样例或选择本地 JSON。", 15, Ui.MUTED));
+            int enabled = 0;
+            for (PluginStore.Installed entry : entries) if (entry.enabled) enabled++;
+            TextView count = PluginScreen.text(this, entries.size() + " 个已安装 · " + enabled + " 个已启用", 13, PluginScreen.MUTED);
+            installed.addView(count);
+            if (entries.isEmpty()) {
+                Ui.gap(installed, 12);
+                LinearLayout empty = PluginScreen.card(this, PluginScreen.SURFACE);
+                empty.addView(PluginScreen.heading(this, "还没有插件", 17));
+                Ui.gap(empty, 4);
+                empty.addView(PluginScreen.text(this, "从插件源添加内置样例，或导入本地 JSON 清单。", 14, PluginScreen.MUTED));
+                installed.addView(empty);
+            }
             for (PluginStore.Installed entry : entries) showEntry(entry);
-        } catch (IOException e) { installed.addView(Ui.text(this, "插件设置无法读取。没有运行任何插件。", 15, Ui.INK)); }
+        } catch (IOException e) {
+            Ui.gap(installed, 12);
+            LinearLayout failure = PluginScreen.card(this, PluginScreen.SURFACE);
+            failure.addView(PluginScreen.text(this, "插件设置无法读取。没有运行任何插件。", 14, PluginScreen.INK));
+            installed.addView(failure);
+        }
     }
 
     private void showEntry(PluginStore.Installed entry) {
         Ui.gap(installed, 10);
-        LinearLayout card = Ui.column(this);
-        Ui.pad(card, 12);
-        card.setBackground(Ui.outline(this, android.graphics.Color.WHITE, 12));
-        card.addView(Ui.title(this, entry.manifest.name, 17));
-        card.addView(Ui.text(this, entry.source.label + " · " + (entry.enabled ? "已启用" : "已禁用"), 14, Ui.MUTED));
-        card.addView(Ui.text(this, entry.manifest.id, 13, Ui.MUTED));
-        card.addView(Ui.text(this, entry.manifest.description, 14, Ui.INK));
-        if (entry.enabled) card.addView(Ui.primary(this, "运行：选择 TXT / MD", () -> {
-            awaitingRunId = entry.manifest.id;
-            pick(PICK_TEXT);
-        }));
+        LinearLayout card = PluginScreen.card(this, PluginScreen.SURFACE);
+        card.addView(PluginScreen.heading(this, entry.manifest.name, 18));
+        Ui.gap(card, 4);
+        card.addView(PluginScreen.state(this, entry.source.label + " · " + (entry.enabled ? "已启用" : "已禁用"), entry.enabled));
+        Ui.gap(card, 8);
+        card.addView(PluginScreen.text(this, entry.manifest.description, 14, PluginScreen.INK));
+        Ui.gap(card, 4);
+        card.addView(PluginScreen.text(this, "访问范围：仅在运行时读取所选文档；不保留授权、不写入、不上传。", 13, PluginScreen.MUTED));
+        Ui.gap(card, 10);
+        if (entry.enabled) {
+            card.addView(PluginScreen.button(this, "运行：选择 TXT / MD", null, PluginScreen.SAGE, Color.WHITE, () -> {
+                awaitingRunId = entry.manifest.id;
+                pick(PICK_TEXT);
+            }), new LinearLayout.LayoutParams(-1, -2));
+            Ui.gap(card, 8);
+        }
         String toggle = entry.enabled ? "禁用" : "启用";
         LinearLayout actions = Ui.row(this);
-        actions.addView(Ui.button(this, toggle, () -> {
-            try { store.setEnabled(entry.manifest.id, !entry.enabled); refresh(); }
-            catch (IOException e) { error("未更新插件", e); }
-        }, toggle + " " + entry.manifest.name), Ui.weight());
-        actions.addView(Ui.button(this, "移除", () -> new AlertDialog.Builder(this).setTitle("移除此插件？")
-                .setMessage(entry.manifest.name + "（只删除应用内的安装记录，不会删除任何源文件。）")
-                .setNegativeButton("取消", null).setPositiveButton("移除", (dialog, which) -> {
-                    try { store.remove(entry.manifest.id); refresh(); }
-                    catch (IOException e) { error("未移除插件", e); }
-                }).show(), "移除 " + entry.manifest.name), Ui.weight());
+        LinearLayout.LayoutParams toggleParams = Ui.weight();
+        toggleParams.setMarginEnd(Ui.dp(this, 8));
+        actions.addView(PluginScreen.button(this, toggle, toggle + " " + entry.manifest.name,
+                PluginScreen.SOFT, PluginScreen.SAGE, () -> {
+                    try { store.setEnabled(entry.manifest.id, !entry.enabled); refresh(); }
+                    catch (IOException e) { error("未更新插件", e); }
+                }), toggleParams);
+        actions.addView(PluginScreen.button(this, "移除", "移除 " + entry.manifest.name,
+                PluginScreen.SURFACE, PluginScreen.REMOVE, () -> PluginScreen.show(new AlertDialog.Builder(this)
+                        .setTitle("移除此插件？")
+                        .setMessage(entry.manifest.name + "（只删除应用内的安装记录，不会删除任何源文件。）")
+                        .setNegativeButton("取消", null).setPositiveButton("移除", (dialog, which) -> {
+                            try { store.remove(entry.manifest.id); refresh(); }
+                            catch (IOException e) { error("未移除插件", e); }
+                        }))), Ui.weight());
         card.addView(actions);
         installed.addView(card);
     }
 
     private void showReport(PluginStore.Installed entry, PluginTextReport.Report report) {
-        StringBuilder summary = new StringBuilder("总行数：").append(report.lines())
-                .append("\n空行：").append(report.blankLines()).append("\n字符数（不含换行）：").append(report.codePoints())
-                .append("\n标题候选：").append(report.headings()).append("\n\n匹配前缀：").append(formatPrefixes(entry.manifest.prefixes));
-        if (!report.examples().isEmpty()) {
-            summary.append("\n\n标题示例（最多 20 条）");
-            for (PluginTextReport.Finding finding : report.examples()) summary.append("\n第 ").append(finding.lineNumber())
-                    .append(" 行 · ").append(finding.text());
-        }
         LinearLayout body = Ui.column(this);
-        Ui.pad(body, 16);
-        body.addView(Ui.text(this, summary.toString(), 15, Ui.INK));
-        body.addView(Ui.text(this, "\n仅按字面前缀匹配；不会改动正文或阅读器目录。此次结果仅显示在本面板。", 14, Ui.MUTED));
-        ScrollView scroll = new ScrollView(this);
-        scroll.addView(body);
-        resultDialog = new AlertDialog.Builder(this).setTitle(entry.manifest.name + " · 结果")
-                .setView(scroll).setPositiveButton("完成", null).show();
+        LinearLayout metrics = PluginScreen.card(this, PluginScreen.SOFT);
+        metrics.addView(PluginScreen.heading(this, "文本统计", 16));
+        Ui.gap(metrics, 6);
+        String summary = "总行数：" + report.lines() + "\n空行：" + report.blankLines()
+                + "\n字符数（不含换行）：" + report.codePoints() + "\n标题候选：" + report.headings();
+        metrics.addView(PluginScreen.text(this, summary, 15, PluginScreen.INK));
+        body.addView(metrics);
+        Ui.gap(body, 10);
+        LinearLayout findings = PluginScreen.card(this, PluginScreen.SURFACE);
+        findings.addView(PluginScreen.heading(this, "标题示例", 16));
+        Ui.gap(findings, 4);
+        findings.addView(PluginScreen.text(this, "匹配前缀：" + formatPrefixes(entry.manifest.prefixes), 13, PluginScreen.MUTED));
+        Ui.gap(findings, 8);
+        if (report.examples().isEmpty()) {
+            findings.addView(PluginScreen.text(this, "未找到匹配的标题示例。", 14, PluginScreen.MUTED));
+        } else {
+            findings.addView(PluginScreen.text(this, "最多显示 20 条", 13, PluginScreen.MUTED));
+            for (PluginTextReport.Finding finding : report.examples()) {
+                Ui.gap(findings, 4);
+                findings.addView(PluginScreen.text(this, "第 " + finding.lineNumber() + " 行 · " + finding.text(), 14, PluginScreen.INK));
+            }
+        }
+        body.addView(findings);
+        Ui.gap(body, 10);
+        body.addView(PluginScreen.text(this, "仅按字面前缀匹配，不会改动正文或阅读器目录。结果仅显示在此面板。", 13, PluginScreen.MUTED));
+        resultDialog = PluginScreen.show(new AlertDialog.Builder(this).setTitle(entry.manifest.name + " · 结果")
+                .setView(PluginScreen.dialogBody(this, body)).setPositiveButton("完成", null));
     }
 
     private String formatPrefixes(List<String> prefixes) {
