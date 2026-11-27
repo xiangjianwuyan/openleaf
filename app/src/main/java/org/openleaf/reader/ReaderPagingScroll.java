@@ -3,11 +3,14 @@ package org.openleaf.reader;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.ScrollView;
+
+import org.openleaf.reader.core.PageMotionPolicy;
 
 /** The same selectable text and layout as scroll mode, but with a fixed page viewport. */
 final class ReaderPagingScroll extends ScrollView {
@@ -50,10 +53,31 @@ final class ReaderPagingScroll extends ScrollView {
         setAlpha(1f);
     }
 
+    /**
+     * 系统动画关闭语义：ValueAnimator（API≥26）、窗口动画缩放、过渡动画缩放任一为 0，
+     * 就跳过翻页动画直接到最终态。API&lt;26 没有 ValueAnimator 开关，按 true 处理。
+     */
+    private boolean systemMotionDisabled() {
+        boolean animatorsEnabled = android.os.Build.VERSION.SDK_INT < 26
+                || android.animation.ValueAnimator.areAnimatorsEnabled();
+        return PageMotionPolicy.skipMotion(
+                readAnimationScale(Settings.Global.WINDOW_ANIMATION_SCALE),
+                readAnimationScale(Settings.Global.TRANSITION_ANIMATION_SCALE),
+                animatorsEnabled);
+    }
+
+    /** 读取系统动画缩放；失败返回 null，由策略按「动画开启」保守处理。 */
+    private Float readAnimationScale(String key) {
+        try {
+            return Settings.Global.getFloat(getContext().getContentResolver(), key, 1f);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     void enter(int direction, int motion) {
         stopMotion();
-        if (motion == 0 || (android.os.Build.VERSION.SDK_INT >= 26
-                && !android.animation.ValueAnimator.areAnimatorsEnabled())) return;
+        if (motion == 0 || systemMotionDisabled()) return;
         if (motion == 1) {
             setTranslationX(direction * (float) getWidth());
             animate().translationX(0f).setDuration(230).start();

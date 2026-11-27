@@ -173,6 +173,8 @@ public final class ReaderActivity extends Activity {
     private static final String[] PAGE_MOTIONS = {"无动画", "平移", "淡化"};
     /** 阶段 4 精修： immersive 阅读（向下滚动隐藏工具栏/底栏，停止或上滑恢复），借鉴 baca. 形态。 */
     private boolean immersiveEnabled=false;
+    /** READ-1：记录工具栏/底栏当前应有的可见态，离开页面时把 alpha 动画收敛到该态。 */
+    private boolean chromeVisible=true;
     private int lastScrollY=0;
     private final android.os.Handler chromeHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable showChrome=()->setChromeVisible(true);
@@ -476,8 +478,13 @@ public final class ReaderActivity extends Activity {
         footer = Ui.row(this);
         Ui.pad(footer, 4);
         previousRead = Ui.button(this, "上一章", () -> turnFromFooter(-1));
-        Button tocButton = Ui.button(this, "目录", this::contents); tocButton.setContentDescription("章节目录");
+        // READ-1：稳定 resource-id，设备自动化按 id 取控件，不依赖随模式变化的文案。
+        previousRead.setId(R.id.readerPrevPage);
+        Button tocButton = Ui.button(this, "目录", this::contents);
+        tocButton.setId(R.id.readerToc);
+        tocButton.setContentDescription("章节目录");
         nextRead = Ui.button(this, "下一章", () -> turnFromFooter(1));
+        nextRead.setId(R.id.readerNextPage);
         footer.addView(previousRead, Ui.weight());
         footer.addView(tocButton, Ui.weight());
         footer.addView(nextRead, Ui.weight());
@@ -2908,12 +2915,32 @@ public final class ReaderActivity extends Activity {
 
     /** 沉浸式阅读：用 alpha 淡出工具栏/底栏，不改变布局尺寸（零回归）。 */
     private void setChromeVisible(boolean visible) {
+        chromeVisible = visible;
         if (toolbar == null || footer == null) return;
         float alpha = visible ? 1f : 0f;
         toolbar.animate().alpha(alpha).setDuration(180).start();
         footer.animate().alpha(alpha).setDuration(180).start();
         toolbar.setClickable(visible);
         footer.setClickable(visible);
+    }
+
+    /**
+     * 离开页面/销毁时收敛动画到最终态：翻页平移与淡化、工具栏/底栏 alpha 全部 cancel 并复位，
+     * 防止动画中途离开后回来残留半透明或位移。只改动画状态，不触碰锚点或正文数据。
+     */
+    private void settleUiAnimations() {
+        chromeHandler.removeCallbacks(showChrome);
+        if (scroll != null) scroll.stopMotion();
+        if (toolbar != null) {
+            toolbar.animate().cancel();
+            toolbar.setAlpha(chromeVisible ? 1f : 0f);
+            toolbar.setClickable(chromeVisible);
+        }
+        if (footer != null) {
+            footer.animate().cancel();
+            footer.setAlpha(chromeVisible ? 1f : 0f);
+            footer.setClickable(chromeVisible);
+        }
     }
 
     private String themeName() { return ThemePalette.presetName(theme); }
@@ -3047,6 +3074,7 @@ public final class ReaderActivity extends Activity {
         android.view.WindowManager.LayoutParams params = getWindow().getAttributes();
         params.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
         getWindow().setAttributes(params);
+        settleUiAnimations();
         super.onPause();
     }
     @Override protected void onDestroy() {
@@ -3060,6 +3088,7 @@ public final class ReaderActivity extends Activity {
         autoHandler.removeCallbacks(autoTurnTask);
         commitReadingSegment();
         if(book!=null)book.close();
+        settleUiAnimations();
         super.onDestroy();
     }
 }

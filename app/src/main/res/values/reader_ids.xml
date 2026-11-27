@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- READ-1：阅读页关键控件的稳定 resource-id，供设备自动化按 id 定位。 -->
+<resources>
+    <item name="readerPrevPage" type="id" />
+    <item name="readerToc" type="id" />
+    <item name="readerNextPage" type="id" />
+</resources>
