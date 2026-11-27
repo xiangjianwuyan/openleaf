@@ -33,6 +33,25 @@ MANIFEST 只覆盖本目录 6 个 zip 样本，不覆盖 README.md、MANIFEST.sh
 QA-1 顶层 `validation/fixtures/MANIFEST.sha256` 保持不变，仍只覆盖其原有 12 个夹具。
 本目录继承上级 `.gitattributes` 的 `* -text`，避免检出换行改写哈希。
 
+## 本轮新增：0.63 备份恢复回归测试（不针对 ol037 本体）
+
+- `BackupRoundtripInstrumentation` 新增的 SAF 回归，测的是 **0.62.0 修复后的导出路径**：
+  `LibraryBackup.export()` 对 `books.file` 为空的 SAF 引用书，经 `ContentResolver` 读取
+  `book_references.source_uri` 的书文件字节。它在 debug 插桩内用合成 provider 夹具做
+  导出→恢复往返；**不是** ol037 `backup-v6.zip` 本体，也不能据此声称旧本体兼容。
+- `BackupLegacyShapeTest`（纯 JVM）只测 `BackupManifest.validateStructure` 的结构层契约
+  （v1..v6 接受、畸形条目致命拒绝、设备字段/重新生成字段分类），输出
+  `SCOPE: structural contract only; ol037 backup-v6.zip body absent`；同样只是结构层接受，
+  **不是**恢复成功保证。
+- 真正拿到 ol037 `backup-v6.zip` 后仍需逐项核对的清单：
+  1. `schemaVersion` 是否为受支持的 1..6，且清单结构校验零致命；
+  2. 16 个 DATA 段（含 `reader_prefs`）齐全且与 `BackupManifest.DATA_SECTIONS` 一致；
+  3. 逐本核对 `books.sha256` 与 `files/<bookId>.<ext>` 实际字节的 SHA-256；
+  4. 悬挂 FK（例如统计行指向已删书）被跳过，且不导致整次恢复回滚；
+  5. `books.id` / `folders.id` 重映射后，标注、想法、统计、进度锚点全部指向目标 id；
+  6. 阅读进度、标注/想法、阅读时长（含分列口径）确实从备份迁移到目标设备；
+  7. 恢复后逐本实际打开验证，而不是只看清单计数或数据库行数。
+
 ## 完整性记录
 
 - 生成器本体 SHA-256：`b3f8a30c8b76b0431f6bf632e7973f009c3dd6d50db596c35e6ba01e5a3832eb`
