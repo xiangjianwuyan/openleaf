@@ -55,7 +55,8 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         try {
             prepare();
-            check("export manifest declares 15 sections at version 4", this::manifestShape);
+            check("export manifest declares " + BackupManifest.DATA_SECTIONS.length
+                    + " sections at version " + BackupManifest.SCHEMA_VERSION, this::manifestShape);
             check("export self-check reports no issue", this::selfCheck);
             check("roundtrip restores book, progress and annotation", this::libraryRoundtrip);
             check("roundtrip restores book and media statistics", this::statsRoundtrip);
@@ -112,14 +113,16 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
 
     private void manifestShape() throws Exception {
         JSONObject manifest = new JSONObject(new String(readEntry(backup, "manifest.json"), StandardCharsets.UTF_8));
-        eq(4, manifest.optInt("schemaVersion"), "清单版本应为 4");
+        eq(BackupManifest.SCHEMA_VERSION, manifest.optInt("schemaVersion"),
+                "清单版本应为 " + BackupManifest.SCHEMA_VERSION);
         JSONArray entries = manifest.optJSONArray("entries");
         require(entries != null, "清单缺少 entries");
         int dataCount = 0;
         for (int i = 0; i < entries.length(); i++) {
             if ("DATA".equals(entries.getJSONObject(i).optString("kind"))) dataCount++;
         }
-        eq(15, dataCount, "应有 15 个数据段（含 reader_prefs）");
+        eq(BackupManifest.DATA_SECTIONS.length, dataCount,
+                "应有 " + BackupManifest.DATA_SECTIONS.length + " 个数据段（含 reader_prefs）");
         record("sections=" + dataCount);
     }
 

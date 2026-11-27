@@ -1,0 +1,2 @@
+# 夹具按字节存储与检出：禁止 core.autocrlf 改写换行，否则 MANIFEST.sha256 失效。
+* -text
