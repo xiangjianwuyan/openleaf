@@ -12,6 +12,9 @@ dependencies {
 
 android {
     namespace 'org.openleaf.reader'
+    buildFeatures {
+        buildConfig = true
+    }
     compileSdk 36
     // T01: pin the NDK used for the one-time ndk-build toolchain verification.
     ndkVersion '27.0.12077973'
