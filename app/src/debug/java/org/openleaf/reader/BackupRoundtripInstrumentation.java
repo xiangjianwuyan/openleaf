@@ -273,9 +273,34 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
                 "导出包不得包含 data/book_references.json");
         record("entry=" + safPath + " kind=FILE size=" + safEntry.size + " missing=" + safMissing.size());
 
+        // 取证：区分 (a) 导出没写 SAF 书行 与 (b) books.json 有行但 planIdMap 没映射。
+        JSONObject booksSection = new JSONObject(
+                new String(readEntry(backup, "data/books.json"), StandardCharsets.UTF_8));
+        JSONArray bookRows = booksSection.optJSONArray("rows");
+        require(bookRows != null && bookRows.length() >= 1, "books.json 应至少含一行书");
+        StringBuilder rowsDump = new StringBuilder();
+        boolean safRowPresent = false;
+        for (int i = 0; i < bookRows.length(); i++) {
+            JSONObject row = bookRows.getJSONObject(i);
+            String rowId = row.optString("id", "");
+            if (SAF_BOOK_ID.equals(rowId)) safRowPresent = true;
+            rowsDump.append("{id=").append(rowId)
+                    .append(",sha256=").append(row.optString("sha256", ""))
+                    .append(",file=").append(row.has("file") ? row.optString("file", "") : "<stripped>")
+                    .append("} ");
+        }
+        record("books.json rows=" + rowsDump);
         LibraryRestore.Preflight plan = restoreIntoFreshTarget();
+        record("bookIdMap.keySet()=" + plan.bookIdMap.keySet());
+        record("target books with SAF sha256=" + count(
+                LibraryDatabase.get(target).getReadableDatabase(),
+                "SELECT COUNT(*) FROM books WHERE sha256=?", safExpectedSha));
+        require(safRowPresent, "导出侧 books.json 缺少 SAF 书行（夹具/导出问题）");
         String targetSafId = plan.bookIdMap.get(SAF_BOOK_ID);
-        require(targetSafId != null && !targetSafId.isEmpty(), "SAF 书未被恢复（没有 id 映射）");
+        require(targetSafId != null && !targetSafId.isEmpty(),
+                "SAF 书未被恢复（没有 id 映射）：LibraryRestore.preflight():113 将 "
+                        + "\"books\" 作为 idColumn 传给 planIdMap，row.optString(\"books\") 恒为空，"
+                        + "bookIdMap 永远为空（产品缺陷，0.62 禁改区，待单独修复）");
         SQLiteDatabase db = LibraryDatabase.get(target).getReadableDatabase();
         String restoredFile = null;
         android.database.Cursor cursor = db.query("books", new String[]{"file"}, "id=?",
