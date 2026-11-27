@@ -67,7 +67,7 @@ public final class PluginActivity extends Activity {
         Ui.gap(intro, 4);
         intro.addView(PluginScreen.text(this, "插件仅在你主动运行并选择文档后读取文件，不会修改原件或书库。", 14, PluginScreen.INK));
         Ui.gap(intro, 12);
-        source = PluginScreen.button(this, "插件源", null, PluginScreen.SAGE, Color.WHITE, this::chooseSource);
+        source = PluginScreen.button(this, "插件源", "选择插件来源，查看用途和访问范围", PluginScreen.SAGE, Color.WHITE, this::chooseSource);
         intro.addView(source, new LinearLayout.LayoutParams(-1, -2));
         body.addView(intro);
         activityStatus = Ui.column(this);
@@ -119,7 +119,7 @@ public final class PluginActivity extends Activity {
         card.addView(PluginScreen.heading(this, name, 17));
         card.addView(PluginScreen.text(this, purpose, 14, PluginScreen.MUTED));
         Ui.gap(card, 8);
-        card.addView(PluginScreen.button(this, label, null, PluginScreen.SOFT, PluginScreen.SAGE, open),
+        card.addView(PluginScreen.button(this, label, label, PluginScreen.SOFT, PluginScreen.SAGE, open),
                 new LinearLayout.LayoutParams(-1, -2));
         body.addView(card);
     }
@@ -198,7 +198,7 @@ public final class PluginActivity extends Activity {
         progress.addView(PluginScreen.text(this, label, 14, PluginScreen.INK), Ui.weight());
         panel.addView(progress);
         Ui.gap(panel, 8);
-        panel.addView(PluginScreen.button(this, "取消", null, PluginScreen.PAPER, PluginScreen.SAGE, this::cancelRead));
+        panel.addView(PluginScreen.button(this, "取消", "取消当前插件读取操作", PluginScreen.PAPER, PluginScreen.SAGE, this::cancelRead));
         activityStatus.addView(panel);
         task = worker.submit(() -> {
             try {
@@ -302,7 +302,7 @@ public final class PluginActivity extends Activity {
         card.addView(PluginScreen.text(this, "访问范围：仅在运行时读取所选文档；不保留授权、不写入、不上传。", 13, PluginScreen.MUTED));
         Ui.gap(card, 10);
         if (entry.enabled) {
-            card.addView(PluginScreen.button(this, "运行：选择 TXT / MD", null, PluginScreen.SAGE, Color.WHITE, () -> {
+            card.addView(PluginScreen.button(this, "运行：选择 TXT / MD", "运行插件 " + entry.manifest.name + "，选择 TXT 或 MD 文档", PluginScreen.SAGE, Color.WHITE, () -> {
                 awaitingRunId = entry.manifest.id;
                 pick(PICK_TEXT);
             }), new LinearLayout.LayoutParams(-1, -2));

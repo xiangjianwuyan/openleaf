@@ -411,10 +411,10 @@ public final class ReaderActivity extends Activity {
         searchControls=Ui.column(this);Ui.pad(searchControls,4);
         searchStatus=Ui.text(this,"",12,Ui.MUTED);searchStatus.setMaxLines(2);searchControls.addView(searchStatus);
         LinearLayout matchActions=Ui.row(this);
-        previousMatch=Ui.button(this,"上一个",()->moveMatch(-1));matchActions.addView(previousMatch,Ui.weight());
-        nextMatch=Ui.button(this,"下一个",()->moveMatch(1));matchActions.addView(nextMatch,Ui.weight());
-        matchActions.addView(Ui.button(this,"结果列表",this::openSearch),Ui.weight());
-        matchActions.addView(Ui.button(this,"清除",this::clearSearch),Ui.weight());searchControls.addView(matchActions);
+        previousMatch=Ui.button(this,"上一个",()->moveMatch(-1),"上一个搜索结果");matchActions.addView(previousMatch,Ui.weight());
+        nextMatch=Ui.button(this,"下一个",()->moveMatch(1),"下一个搜索结果");matchActions.addView(nextMatch,Ui.weight());
+        matchActions.addView(Ui.button(this,"结果列表",this::openSearch,"查看搜索结果列表"),Ui.weight());
+        matchActions.addView(Ui.button(this,"清除",this::clearSearch,"清除搜索结果"),Ui.weight());searchControls.addView(matchActions);
         searchControls.setVisibility(View.GONE);root.addView(searchControls);
         horizontalPages = supportsPaging() && prefs.getBoolean("readerHorizontalPages", false);
         pageIndex = pageAnchor = enterPageDirection = 0;
@@ -652,6 +652,8 @@ public final class ReaderActivity extends Activity {
         holder[0] = Ui.button(this, labelSupplier.get(), () -> {
             onClick.run();
             holder[0].setText(labelSupplier.get());
+            // A11Y-1: desc 与文案同步，避免 TalkBack 在档位切换后仍读到旧状态。
+            holder[0].setContentDescription(labelSupplier.get());
         }, desc);
         holder[0].setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.LEFT);
         holder[0].setTextColor(Color.rgb(38, 53, 44));
@@ -2670,6 +2672,11 @@ public final class ReaderActivity extends Activity {
             views.options[5].setText("首行缩进：" + ReaderStyle.INDENT[draft.indent()] + " 字");
             views.options[6].setText("简繁：" + CONVERT_LABELS[draft.convert()]);
             views.options[7].setText("重置为默认");
+            // A11Y-1: 档位按钮 desc 带当前值；保留「排版项-N」前缀兼容旧自动化钩子。
+            for (int i = 0; i < views.options.length; i++) {
+                views.options[i].setContentDescription("排版项-" + i + " " + views.options[i].getText()
+                        + (i == 7 ? "" : "，点击切换"));
+            }
         }
 
         TextView preview = views.preview;
@@ -2850,11 +2857,21 @@ public final class ReaderActivity extends Activity {
         Runnable refresh = () -> {
             mode.setText("阅读方式：" + (horizontalPages ? "左右分页" : "滚动"));
             mode.setEnabled(supportsPaging());
+            // A11Y-1: 禁用态也要让 TalkBack 读出原因，不能只靠下方灰色说明文字。
+            mode.setContentDescription(supportsPaging()
+                    ? "阅读方式：" + mode.getText() + "，点击切换"
+                    : "阅读方式不可用：左右分页仅适用于本地 TXT / MD，当前格式不支持");
             motion.setText(horizontalPages ? "翻页动画：" + PAGE_MOTIONS[pageMotion] : "翻页动画（仅左右分页）");
             motion.setEnabled(horizontalPages);
+            motion.setContentDescription(horizontalPages
+                    ? "翻页动画：" + PAGE_MOTIONS[pageMotion] + "，点击切换"
+                    : "翻页动画不可用：仅左右分页模式可选，当前为滚动模式");
             immersive.setText(horizontalPages ? "沉浸阅读（仅滚动）" :
                     "沉浸阅读：" + (immersiveEnabled ? "开（下滑隐藏工具栏）" : "关"));
             immersive.setEnabled(!horizontalPages);
+            immersive.setContentDescription(horizontalPages
+                    ? "沉浸阅读不可用：仅滚动模式支持，左右分页时不可用"
+                    : "沉浸阅读：" + (immersiveEnabled ? "开" : "关") + "，点击切换");
         };
         mode.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("阅读方式")
                 .setSingleChoiceItems(new String[]{"滚动", "左右分页"}, horizontalPages ? 1 : 0, (d, selected) -> {
@@ -2923,6 +2940,11 @@ public final class ReaderActivity extends Activity {
             }
         });
         dialog.show();
+        // A11Y-1: 系统 NegativeButton 无原生 desc 入口，show() 之后取到实际 Button 再补语义。
+        Button closeButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
+        if (closeButton != null) closeButton.setContentDescription("关闭" + title + "面板");
+        // 焦点回退需设备确认：showReaderOptions 的上游触发者可能是另一个对话框按钮，
+        // 没有稳定可复用的触发视图，故不冒然加 setOnDismissListener 抢焦点。
     }
 
     /** 沉浸式阅读：用 alpha 淡出工具栏/底栏，不改变布局尺寸（零回归）。 */
