@@ -53,6 +53,7 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
     // SAF 引用书回归：0.62.0 真机回环失败模式的固定夹具（books.file 为空、字节在 source_uri）。
     private static final String SAF_BOOK_ID = "saf-fixture-book";
     private static final String SAF_DOCUMENT_ID = "backup-saf/saf-fixture.txt";
+    private static final String FIXTURE_FOLDER_ID = "backup-fixture-folder";
     private byte[] safExpectedBytes;
     private String safExpectedSha;
     private List<String> safMissing;
@@ -117,6 +118,7 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
         stats.addMediaSeconds(ReadingLedger.Kind.COMIC, MEDIA_KEY, "备份漫画", 60, SEGMENT + 1);
 
         prepareSafReferencedBook();
+        prepareFolderFixture();
 
         // SAF 书与本地书放进同一个包：保留原 6 个 check 的目标书不变，同时让 SAF 书走真实导出路径。
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -158,6 +160,17 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
         ref.put("source_uri", safUri.toString());
         require(db.insert("book_references", null, ref) != -1, "SAF 引用行插入失败");
         record("saf sha=" + safExpectedSha.substring(0, 12) + " size=" + safExpectedBytes.length);
+    }
+
+    /** 最小手工文件夹夹具：让 folderIdMap 修复有可验证的行（source_tree/relative_path 导出时会剥离）。 */
+    private void prepareFolderFixture() {
+        android.content.ContentValues folder = new android.content.ContentValues();
+        folder.put("id", FIXTURE_FOLDER_ID);
+        folder.put("name", "备份往返文件夹");
+        folder.put("source_tree", "manual:" + FIXTURE_FOLDER_ID);
+        folder.put("relative_path", "");
+        require(LibraryDatabase.get(source).getWritableDatabase()
+                .insert("folders", null, folder) != -1, "文件夹夹具插入失败");
     }
 
     private void manifestShape() throws Exception {
@@ -292,15 +305,19 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
         record("books.json rows=" + rowsDump);
         LibraryRestore.Preflight plan = restoreIntoFreshTarget();
         record("bookIdMap.keySet()=" + plan.bookIdMap.keySet());
+        String targetFolderId = plan.folderIdMap.get(FIXTURE_FOLDER_ID);
+        require(targetFolderId != null && !targetFolderId.isEmpty(),
+                "folderIdMap 应含源文件夹 " + FIXTURE_FOLDER_ID + " 的映射，实际 " + plan.folderIdMap.keySet());
+        eq(1L, count(LibraryDatabase.get(target).getReadableDatabase(),
+                "SELECT COUNT(*) FROM folders WHERE id=?", targetFolderId), "目标库应含重映射后的文件夹");
+        record("folderIdMap.keySet()=" + plan.folderIdMap.keySet());
         record("target books with SAF sha256=" + count(
                 LibraryDatabase.get(target).getReadableDatabase(),
                 "SELECT COUNT(*) FROM books WHERE sha256=?", safExpectedSha));
         require(safRowPresent, "导出侧 books.json 缺少 SAF 书行（夹具/导出问题）");
         String targetSafId = plan.bookIdMap.get(SAF_BOOK_ID);
         require(targetSafId != null && !targetSafId.isEmpty(),
-                "SAF 书未被恢复（没有 id 映射）：LibraryRestore.preflight():113 将 "
-                        + "\"books\" 作为 idColumn 传给 planIdMap，row.optString(\"books\") 恒为空，"
-                        + "bookIdMap 永远为空（产品缺陷，0.62 禁改区，待单独修复）");
+                "SAF 书未被恢复：books.json 有行但 bookIdMap 没有该源 id 的映射");
         SQLiteDatabase db = LibraryDatabase.get(target).getReadableDatabase();
         String restoredFile = null;
         android.database.Cursor cursor = db.query("books", new String[]{"file"}, "id=?",

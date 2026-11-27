@@ -110,8 +110,8 @@ public final class LibraryRestore {
         }
 
         // 规划重映射：books.id 与 folders.id
-        Map<String, String> bookMap = planIdMap(buffers.get("data/books.json"), "books", "books");
-        Map<String, String> folderMap = planIdMap(buffers.get("data/folders.json"), "folders", "folders");
+        Map<String, String> bookMap = planIdMap(buffers.get("data/books.json"), "books", "id");
+        Map<String, String> folderMap = planIdMap(buffers.get("data/folders.json"), "folders", "id");
         return new Preflight(manifest, entries, bookMap, folderMap, issues, buffers);
     }
 
