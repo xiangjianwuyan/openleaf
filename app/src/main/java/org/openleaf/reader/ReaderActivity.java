@@ -857,14 +857,26 @@ public final class ReaderActivity extends Activity {
     private void handleEditOutcome(int result, Intent data) {
         if (result != RESULT_OK || data == null || id == null) return;
         String kind = data.getStringExtra(LocalTextEditorActivity.EXTRA_EDIT_KIND);
-        if (kind == null) { reloadBook(); return; }
+        String detail = data.getStringExtra(LocalTextEditorActivity.EXTRA_EDIT_MESSAGE);
+        if (kind == null) {
+            Toast.makeText(this, "编辑未保存：未收到保存结果，已重新载入原件；请检查草稿。"
+                    + (detail == null || detail.isEmpty() ? "" : "\n" + detail), Toast.LENGTH_LONG).show();
+            reloadBook();
+            return;
+        }
         if (ContentContracts.EditKind.SAVED_COPY.name().equals(kind)) {
             // 另存副本未改变当前书，不重载、不改哈希
             Toast.makeText(this, "已另存副本，当前书籍未改变", Toast.LENGTH_SHORT).show();
             return;
         }
         if (ContentContracts.EditKind.CONFLICT.name().equals(kind)) {
-            Toast.makeText(this, "原文件已被外部修改，未覆盖；可另存副本", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "编辑未保存：原文件已被外部修改，未覆盖；草稿已保留，可另存副本。"
+                    + (detail == null || detail.isEmpty() ? "" : "\n" + detail), Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (ContentContracts.EditKind.FAILED.name().equals(kind)) {
+            Toast.makeText(this, "编辑未保存：未能确认写入，草稿已保留；请先检查原件。"
+                    + (detail == null || detail.isEmpty() ? "" : "\n" + detail), Toast.LENGTH_LONG).show();
             return;
         }
         if (ContentContracts.EditKind.COVERED.name().equals(kind)) {

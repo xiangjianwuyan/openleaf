@@ -17,6 +17,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 import org.openleaf.reader.core.ContentContracts;
+import org.openleaf.reader.core.EditBudget;
 import org.openleaf.reader.core.TextEncoding;
 import java.io.IOException;
 import java.io.InputStream;
@@ -94,6 +95,7 @@ public final class LocalTextEditorActivity extends Activity {
         boolean sourceUnsafe;
     }
     private boolean busy, sourceChanged, fromReader;
+    private int lastBudgetNotice = EditBudget.OK;
     private Uri pendingCopy;
     private PendingWriteStore pendingWrites;
     static final String EXTRA_EDIT_PENDING_ID = "editPendingId";
@@ -141,7 +143,7 @@ public final class LocalTextEditorActivity extends Activity {
                 | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         editor.setHorizontallyScrolling(false);
         editor.setSaveEnabled(false);
-        editor.setFilters(new InputFilter[]{new InputFilter.LengthFilter(LocalTextDocument.MAX_BYTES)});
+        editor.setFilters(new InputFilter[]{this::filterInput});
         editor.setContentDescription("文件编辑内容");
         editor.setTextSize(16);
         Ui.pad(editor, 12);
@@ -240,6 +242,32 @@ public final class LocalTextEditorActivity extends Activity {
         overwrite.setEnabled(ready && sameReadingSource && !sourceChanged && canWriteSource());
     }
 
+    /**
+     * Byte-accurate input gate. The character-based LengthFilter previously allowed twice the
+     * budget for UTF-16 and far too much for CJK/emoji; the save gate uses this same budget now.
+     */
+    private CharSequence filterInput(CharSequence source, int start, int end,
+                                     CharSequence dest, int dstart, int dend) {
+        LocalTextDocument current = document;
+        if (current == null) return null;
+        String candidate = dest.subSequence(0, dstart).toString()
+                + source.subSequence(start, end).toString()
+                + dest.subSequence(dend, dest.length()).toString();
+        int verdict = EditBudget.check(candidate, current.charset, current.newline,
+                current.bom(), LocalTextDocument.MAX_BYTES);
+        if (verdict == EditBudget.OK) {
+            lastBudgetNotice = EditBudget.OK;
+            return null;
+        }
+        if (verdict != lastBudgetNotice && status != null) {
+            lastBudgetNotice = verdict;
+            status.setText(verdict == EditBudget.TOO_LARGE
+                    ? "文本已达 128 KiB 编码上限，多余内容未输入"
+                    : "当前编码不能保存该字符，已阻止输入");
+        }
+        return "";
+    }
+
     private void showReplace() {
         if (busy || document == null) return;
         EditText find = new EditText(this), replacement = new EditText(this);
@@ -264,11 +292,15 @@ public final class LocalTextEditorActivity extends Activity {
                     while (matcher.find()) count++;
                     if (count == 0) { status.setText("没有找到匹配的文字"); return; }
                     String replacementText = replacement.getText().toString();
-                    long projected = sourceText.length() + (long) count * (replacementText.length() - needle.length());
-                    if (projected > LocalTextDocument.MAX_BYTES) {
-                        status.setText("替换后的文本超过编辑上限，草稿未改变"); return;
-                    }
                     String result = matcher.replaceAll(Matcher.quoteReplacement(replacementText));
+                    int verdict = EditBudget.check(result, document.charset, document.newline,
+                            document.bom(), LocalTextDocument.MAX_BYTES);
+                    if (verdict != EditBudget.OK) {
+                        status.setText(verdict == EditBudget.TOO_LARGE
+                                ? "替换后的文本超过编辑上限，草稿未改变"
+                                : "替换后的文字不能用原编码保存，草稿未改变");
+                        return;
+                    }
                     applyBulk(result, "已替换 " + count + " 处");
                 }).show();
     }
@@ -437,6 +469,8 @@ public final class LocalTextEditorActivity extends Activity {
                 result.uri = target.toString();
                 result.size = bytes.length;
             } catch (Exception failure) {
+                result.kind = conflict ? ContentContracts.EditKind.CONFLICT.name()
+                        : ContentContracts.EditKind.FAILED.name();
                 result.sourceUnsafe = replaceOriginal && (conflict || writeAttempted);
                 result.notice = app.getString(R.string.local_text_editor_error, message(failure));
                 if (replaceOriginal && writeAttempted) result.notice += "。无法确认原件完整性；请先另存草稿，再检查原件。";
@@ -460,7 +494,10 @@ public final class LocalTextEditorActivity extends Activity {
         session.owner = null;
         sourceChanged |= result.sourceUnsafe;
         if (result.hash != null) originalHash = result.hash;
-        if (result.kind != null) baseline = session.text;
+        boolean saved = ContentContracts.EditKind.COVERED.name().equals(result.kind)
+                || ContentContracts.EditKind.SAVED_COPY.name().equals(result.kind);
+        // Only a saved draft becomes the new baseline; a conflict/failed write must stay dirty.
+        if (saved) baseline = session.text;
         status.setText(result.notice);
         updateControls(false);
         if (fromReader && result.kind != null) {
@@ -470,7 +507,9 @@ public final class LocalTextEditorActivity extends Activity {
                     .putExtra(EXTRA_EDIT_PENDING_ID, result.pendingId)
                     .putExtra(EXTRA_RESUME_SOURCE_OFFSET, result.resumeOffset);
             setResult(RESULT_OK, out);
-            finish();
+            if (saved) finish();
+            // CONFLICT/FAILED keep the editor open so the draft can still be copied or retried;
+            // the typed outcome is delivered to the reader when the user leaves.
         }
     }
 

@@ -4,7 +4,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
-import java.nio.CharBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
 import java.nio.charset.CodingErrorAction;
@@ -12,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+import org.openleaf.reader.core.EditBudget;
 import org.openleaf.reader.core.TextEncoding;
 
 /** Size-bounded text for the SAF editor. Display newlines use LF; output keeps uniform source newlines. */
@@ -121,23 +121,11 @@ final class LocalTextDocument {
     }
 
     byte[] encode(String text) throws IOException {
-        String normalized = text.replace("\r\n", "\n").replace('\r', '\n');
-        for (int i = 0; i < normalized.length(); i++) {
-            char c = normalized.charAt(i);
-            if (Character.isISOControl(c) && c != '\n' && c != '\t')
-                throw new IOException("编辑内容包含不支持的控制字符");
-        }
-        if (!"\n".equals(newline)) normalized = normalized.replace("\n", newline);
-        ByteBuffer encoded;
-        try {
-            encoded = charset.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT).encode(CharBuffer.wrap(normalized));
-        } catch (CharacterCodingException invalid) { throw new IOException("编辑内容不能用原编码保存", invalid); }
-        if (bom.length + encoded.remaining() > MAX_BYTES) throw new IOException("保存后的文本超过 128 KiB");
-        byte[] result = Arrays.copyOf(bom, bom.length + encoded.remaining());
-        encoded.get(result, bom.length, encoded.remaining());
-        return result;
+        return EditBudget.encode(text, charset, newline, bom, MAX_BYTES);
     }
+
+    /** Read-only view for the input filter; the budget helper never mutates it. */
+    byte[] bom() { return bom; }
 
     String description() {
         return charset.name() + (bom.length == 0 ? "" : "（带 BOM）")
