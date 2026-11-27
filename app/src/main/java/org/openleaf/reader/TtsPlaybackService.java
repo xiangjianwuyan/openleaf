@@ -30,6 +30,7 @@ import org.openleaf.reader.core.ProgressModel;
 import org.openleaf.reader.core.ReadingAnchor;
 import org.openleaf.reader.core.ReadingLedger;
 import org.openleaf.reader.core.SpeechText;
+import org.openleaf.reader.core.TextIndexSpec;
 import org.openleaf.reader.core.TtsPlaybackPlan;
 
 import java.io.IOException;
@@ -143,6 +144,19 @@ public final class TtsPlaybackService extends Service {
                 .setAction(ACTION_START_BOOK)
                 .putExtra(EXTRA_BOOK_ID, bookId)
                 .putExtra(EXTRA_CHAPTER, Math.max(0, chapter)));
+    }
+
+    /**
+     * 带文本索引 spec 起播：只把 spec 序列化进 intent 透传，开书/会话快照留给 T04。
+     * 原 3 参重载逐字不变，未携带 spec 的旧路径继续走默认索引。
+     */
+    public static void playBook(Context context, String bookId, int chapter, TextIndexSpec spec) {
+        Intent intent = new Intent(context, TtsPlaybackService.class)
+                .setAction(ACTION_START_BOOK)
+                .putExtra(EXTRA_BOOK_ID, bookId)
+                .putExtra(EXTRA_CHAPTER, Math.max(0, chapter));
+        TextIndexRegistry.putInto(intent, spec);
+        start(context, intent);
     }
 
     public static void playText(Context context, String text) {

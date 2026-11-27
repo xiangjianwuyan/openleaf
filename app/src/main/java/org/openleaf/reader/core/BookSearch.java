@@ -28,11 +28,18 @@ public final class BookSearch {
         public final String snippet;
         public final int mode;
         public final int[] matchStarts, matchEnds;
+        /** 作品级 UTF-16 字符偏移；-1 表示未知（旧构造器 / 无源偏移来源）。 */
+        public final long sourceStart, sourceEnd;
         Hit(int chapter, int start, int end, int snippetStart, String snippet) {
             this(chapter, start, end, snippetStart, snippet, LITERAL, new int[]{start}, new int[]{end});
         }
         Hit(int chapter, int start, int end, int snippetStart, String snippet,
             int mode, int[] matchStarts, int[] matchEnds) {
+            this(chapter, start, end, snippetStart, snippet, mode, matchStarts, matchEnds, -1L);
+        }
+        /** chapterSourceStart = Σ 前序章字符数；未知传 -1，作品级偏移同样落 -1。 */
+        Hit(int chapter, int start, int end, int snippetStart, String snippet,
+            int mode, int[] matchStarts, int[] matchEnds, long chapterSourceStart) {
             this.chapter = chapter;
             this.start = start;
             this.end = end;
@@ -41,6 +48,8 @@ public final class BookSearch {
             this.mode = mode;
             this.matchStarts = matchStarts == null ? new int[]{start} : matchStarts.clone();
             this.matchEnds = matchEnds == null ? new int[]{end} : matchEnds.clone();
+            this.sourceStart = chapterSourceStart < 0 ? -1L : chapterSourceStart + start;
+            this.sourceEnd = chapterSourceStart < 0 ? -1L : chapterSourceStart + end;
         }
     }
 
@@ -57,6 +66,8 @@ public final class BookSearch {
         int size();
         String load(int index);
         void release(int index);
+        /** 该章的作品级起点（Σ 前序章字符数）；未知返回 -1。 */
+        long sourceStart(int index);
     }
 
     public static Result find(BookParser.BookContent book, String query, boolean caseSensitive,
@@ -72,6 +83,14 @@ public final class BookSearch {
             public int size() { return chapters == null ? 0 : chapters.size(); }
             public String load(int index) { return chapters.get(index).text; }
             public void release(int index) { }
+            public long sourceStart(int index) {
+                long sum = 0;
+                for (int i = 0; i < index; i++) {
+                    String text = chapters.get(i).text;
+                    sum += text == null ? 0 : text.length();
+                }
+                return sum;
+            }
         }, query, caseSensitive, chapterScope, limit, cancelled, mode, nearWindow);
     }
 
@@ -82,6 +101,7 @@ public final class BookSearch {
             public int size() { return book == null ? 0 : book.size(); }
             public String load(int index) { try { return book.load(index); } catch (Exception e) { throw new IllegalStateException(e); } }
             public void release(int index) { book.release(index); }
+            public long sourceStart(int index) { return SourceOffset.cumulative(book, index); }
         }, query, caseSensitive, chapterScope, limit, cancelled, mode, nearWindow);
     }
 
@@ -116,10 +136,11 @@ public final class BookSearch {
         for (int chapter = first; chapter < last; chapter++) {
             check(cancelled);
             String text = chapters.load(chapter);
+            long chapterSourceStart = chapters.sourceStart(chapter);
             try {
-                if (mode == REGEX) searchRegex(text, regex, chapter, mode, limit, hits, truncated, cancelled);
-                else if (mode == NEAR) searchNear(text, nearTerms, nearWindow, caseSensitive, chapter, mode, limit, hits, truncated, cancelled);
-                else searchLiteral(text, query, caseSensitive, mode == WORD, chapter, mode, limit, hits, truncated, cancelled);
+                if (mode == REGEX) searchRegex(text, regex, chapter, chapterSourceStart, mode, limit, hits, truncated, cancelled);
+                else if (mode == NEAR) searchNear(text, nearTerms, nearWindow, caseSensitive, chapter, chapterSourceStart, mode, limit, hits, truncated, cancelled);
+                else searchLiteral(text, query, caseSensitive, mode == WORD, chapter, chapterSourceStart, mode, limit, hits, truncated, cancelled);
             } finally {
                 chapters.release(chapter);
             }
@@ -130,7 +151,7 @@ public final class BookSearch {
     }
 
     private static void searchLiteral(String text, String query, boolean caseSensitive, boolean wholeWord,
-                                      int chapter, int mode, int limit, List<Hit> hits, boolean[] truncated,
+                                      int chapter, long chapterSourceStart, int mode, int limit, List<Hit> hits, boolean[] truncated,
                                       BooleanSupplier cancelled) {
         int last = text.length() - query.length();
         for (int start = 0; start <= last; start++) {
@@ -139,7 +160,7 @@ public final class BookSearch {
             int end = start + query.length();
             if (wholeWord && !isWordMatch(text, start, end, query)) continue;
             if (hits.size() >= limit) { truncated[0] = true; return; }
-            hits.add(makeHit(chapter, start, end, mode, new int[]{start}, new int[]{end}, text));
+            hits.add(makeHit(chapter, start, end, mode, new int[]{start}, new int[]{end}, text, chapterSourceStart));
         }
     }
 
@@ -165,7 +186,7 @@ public final class BookSearch {
         return cp >= 0x3400 && cp <= 0x9FFF || cp >= 0xF900 && cp <= 0xFAFF || cp >= 0x20000;
     }
 
-    private static void searchRegex(String text, Pattern pattern, int chapter, int mode, int limit,
+    private static void searchRegex(String text, Pattern pattern, int chapter, long chapterSourceStart, int mode, int limit,
                                     List<Hit> hits, boolean[] truncated, BooleanSupplier cancelled) {
         Matcher matcher = pattern.matcher(text);
         int from = 0;
@@ -175,14 +196,14 @@ public final class BookSearch {
             if (!matcher.find(from)) break;
             int start = matcher.start(), end = matcher.end();
             if (hits.size() >= limit) { truncated[0] = true; return; }
-            hits.add(makeHit(chapter, start, end, mode, new int[]{start}, new int[]{end}, text));
+            hits.add(makeHit(chapter, start, end, mode, new int[]{start}, new int[]{end}, text, chapterSourceStart));
             from = end == start ? start + 1 : start + 1;
             if (from > text.length()) break;
         }
     }
 
     private static void searchNear(String text, String[] terms, int window, boolean caseSensitive,
-                                   int chapter, int mode, int limit, List<Hit> hits, boolean[] truncated,
+                                   int chapter, long chapterSourceStart, int mode, int limit, List<Hit> hits, boolean[] truncated,
                                    BooleanSupplier cancelled) {
         ArrayList<int[]>[] occurrences = new ArrayList[terms.length];
         for (int t = 0; t < terms.length; t++) {
@@ -221,7 +242,7 @@ public final class BookSearch {
             if (!complete || text.codePointCount(left[0], maxEnd) > window) continue;
             if (!seen.add(left[0], maxEnd)) continue;
             if (hits.size() >= limit) { truncated[0] = true; return; }
-            hits.add(makeHit(chapter, left[0], maxEnd, mode, starts, ends, text));
+            hits.add(makeHit(chapter, left[0], maxEnd, mode, starts, ends, text, chapterSourceStart));
         }
     }
 
@@ -236,13 +257,13 @@ public final class BookSearch {
     }
 
     private static Hit makeHit(int chapter, int start, int end, int mode,
-                               int[] starts, int[] ends, String text) {
+                               int[] starts, int[] ends, String text, long chapterSourceStart) {
         int left = backCodePoints(text, start, 45), right = forwardCodePoints(text, end, 45);
         if (left > 0 && left < text.length() && Character.isLowSurrogate(text.charAt(left))
                 && Character.isHighSurrogate(text.charAt(left - 1))) left--;
         if (right > 0 && right < text.length() && Character.isHighSurrogate(text.charAt(right - 1))
                 && Character.isLowSurrogate(text.charAt(right))) right++;
-        return new Hit(chapter, start, end, left, text.substring(left, right), mode, starts, ends);
+        return new Hit(chapter, start, end, left, text.substring(left, right), mode, starts, ends, chapterSourceStart);
     }
 
     private static String[] splitTerms(String query) {

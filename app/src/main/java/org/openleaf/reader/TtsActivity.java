@@ -12,6 +12,8 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.openleaf.reader.core.TextIndexSpec;
+
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -53,8 +55,10 @@ public final class TtsActivity extends Activity implements TtsPlaybackService.Li
         String bookId = intent == null ? null : intent.getStringExtra(TtsPlaybackService.EXTRA_BOOK_ID);
         String text = intent == null ? null : intent.getStringExtra(EXTRA_SPEAK_TEXT);
         if (bookId != null && !bookId.isEmpty()) {
-            TtsPlaybackService.playBook(this, bookId,
-                    intent.getIntExtra(TtsPlaybackService.EXTRA_CHAPTER, 0));
+            int chapter = intent.getIntExtra(TtsPlaybackService.EXTRA_CHAPTER, 0);
+            TextIndexSpec spec = TextIndexRegistry.claimedFrom(intent);
+            if (spec != null) TtsPlaybackService.playBook(this, bookId, chapter, spec);
+            else TtsPlaybackService.playBook(this, bookId, chapter);
         } else if (text != null && !text.trim().isEmpty()) {
             TtsPlaybackService.playText(this, text);
         }

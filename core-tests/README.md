@@ -225,3 +225,25 @@ javac -encoding UTF-8 --release 17 -d /tmp/ol030-ct \
 java -cp /tmp/ol030-ct ThemePaletteTest
 java -cp /tmp/ol030-ct LyricsTest
 ```
+
+## B 批 T01 core 身份底座（spec 指纹 / 作品级偏移 / 搜索 Hit 偏移）
+
+`TextIndexSpecTest`（同字节不同 prefs 命名 specId 只随编码/规则变、SHA 变化即过期、
+`PositionSync.newRevision()` 连续变化但 specId 不变、canonical 键序无关 + 长度前缀消歧、
+非法档位 clamp 与 null sha 安全）、`SourceOffsetTest`（累加单调、章边界相接、与
+`ReaderActivity.anchorSourceOffset/resolveAnchor` 金标逐字一致、越界/null 返回 -1/{-1,-1}）、
+`BookSearchSourceOffsetTest`（旧 Hit 构造器仍为 -1、新构造器填充作品级偏移、单调与边界相接、
+正则/附近词同口径）均为纯 JVM、无 Android/JUnit/第三方依赖，断言始终启用。
+
+```sh
+javac -encoding UTF-8 --release 17 -d /tmp/ol064-ct \
+  app/src/main/java/org/openleaf/reader/core/*.java \
+  core-tests/TextIndexSpecTest.java core-tests/SourceOffsetTest.java \
+  core-tests/BookSearchSourceOffsetTest.java
+java -cp /tmp/ol064-ct TextIndexSpecTest
+java -cp /tmp/ol064-ct SourceOffsetTest
+java -cp /tmp/ol064-ct BookSearchSourceOffsetTest
+```
+
+> Windows 中文路径下把 `/tmp/ol064-ct` 换成 harness 临时目录（JDK 17），
+> 或用 `powershell -ExecutionPolicy Bypass -File validation/run-coretests.ps1` 一键跑全量。

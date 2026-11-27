@@ -31,6 +31,7 @@ import android.widget.TextView;
 import org.openleaf.reader.core.BookParser;
 import org.openleaf.reader.core.BookSearch;
 import org.openleaf.reader.core.LazyChapterBook;
+import org.openleaf.reader.core.TextIndexSpec;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -60,6 +61,8 @@ public final class BookSearchActivity extends Activity {
     private Future<?> searching;
     private int generation,currentChapter,active=-1;
     private String bookId,initialQuery="",searchedQuery="";
+    /** 入场 spec（派生值）；null 表示调用方未携带或声称无效，过期判定留 T03。 */
+    private TextIndexSpec entrySpec;
     private boolean initialCase,searchedCase,initialChapterScope;
     private int searchedScope=-1,initialMode=BookSearch.LITERAL,searchedMode=BookSearch.LITERAL;
     private int initialWindow=BookSearch.DEFAULT_NEAR_WINDOW,searchedWindow=BookSearch.DEFAULT_NEAR_WINDOW;
@@ -75,6 +78,7 @@ public final class BookSearchActivity extends Activity {
         super.onCreate(state);
         bookId=getIntent().getStringExtra("bookId");
         if(bookId==null){finish();return;}
+        entrySpec=TextIndexRegistry.claimedFrom(getIntent());
         currentChapter=getIntent().getIntExtra("currentChapter",0);
         initialQuery=getIntent().getStringExtra("query");if(initialQuery==null)initialQuery="";
         initialCase=getIntent().getBooleanExtra("caseSensitive",false);
@@ -85,6 +89,7 @@ public final class BookSearchActivity extends Activity {
             initialQuery=state.getString("query",initialQuery);initialCase=state.getBoolean("case",initialCase);
             initialChapterScope=state.getBoolean("chapterScope",initialChapterScope);active=state.getInt("active",-1);
             initialMode=state.getInt("mode",initialMode);initialWindow=state.getInt("window",initialWindow);
+            TextIndexSpec savedSpec=TextIndexRegistry.claimedFrom(state);if(savedSpec!=null)entrySpec=savedSpec;
             int[] closed=state.getIntArray("collapsed");if(closed!=null)for(int chapter:closed)collapsed.add(chapter);
         }
         build();loadBook();
@@ -227,9 +232,13 @@ public final class BookSearchActivity extends Activity {
     private void returnHit(int index){
         if(result==null||index<0||index>=result.hits.size())return;
         BookSearch.Hit hit=result.hits.get(index);
-        setResult(RESULT_OK,new Intent().putExtra("chapter",hit.chapter).putExtra("start",hit.start).putExtra("end",hit.end)
+        Intent out=new Intent().putExtra("chapter",hit.chapter).putExtra("start",hit.start).putExtra("end",hit.end)
             .putExtra("query",searchedQuery).putExtra("caseSensitive",searchedCase).putExtra("scope",searchedScope)
-            .putExtra("searchMode",searchedMode).putExtra("nearWindow",searchedWindow));finish();
+            .putExtra("searchMode",searchedMode).putExtra("nearWindow",searchedWindow)
+            .putExtra(TextIndexRegistry.EXTRA_SOURCE_START,hit.sourceStart)
+            .putExtra(TextIndexRegistry.EXTRA_SOURCE_END,hit.sourceEnd);
+        TextIndexRegistry.putInto(out,entrySpec);
+        setResult(RESULT_OK,out);finish();
     }
 
     private void navigationState(){boolean enabled=result!=null&&!result.hits.isEmpty();previous.setEnabled(enabled);next.setEnabled(enabled);}
@@ -275,6 +284,7 @@ public final class BookSearchActivity extends Activity {
         out.putString("query",input.getText().toString());out.putBoolean("case",caseSensitive.isChecked());out.putBoolean("chapterScope",scope.getSelectedItemPosition()==1);out.putInt("active",active);
         out.putInt("mode",mode.getSelectedItemPosition());
         int[] windowValues={32,64,128,256};out.putInt("window",windowValues[nearWindow.getSelectedItemPosition()]);
+        TextIndexRegistry.putInto(out,entrySpec);
         int[] closed=new int[collapsed.size()];int i=0;for(int chapter:collapsed)closed[i++]=chapter;out.putIntArray("collapsed",closed);super.onSaveInstanceState(out);
     }
     @Override protected void onDestroy(){generation++;main.removeCallbacksAndMessages(null);if(searching!=null)searching.cancel(true);worker.shutdownNow();if(book!=null)book.close();super.onDestroy();}

@@ -576,9 +576,11 @@ public final class ReaderActivity extends Activity {
     }
 
     private void listenFromCurrentChapter() {
-        startActivity(new Intent(this, TtsActivity.class)
+        Intent intent = new Intent(this, TtsActivity.class)
                 .putExtra(TtsPlaybackService.EXTRA_BOOK_ID, id)
-                .putExtra(TtsPlaybackService.EXTRA_CHAPTER, chapter));
+                .putExtra(TtsPlaybackService.EXTRA_CHAPTER, chapter);
+        TextIndexRegistry.putInto(intent, TextIndexRegistry.current(this, id));
+        startActivity(intent);
     }
 
     /** 低频操作收进「更多」；窄屏优先保留排版与本地编辑。 */
@@ -969,10 +971,12 @@ public final class ReaderActivity extends Activity {
     }
 
     private void launchSearch(){
-        startActivityForResult(new Intent(this,BookSearchActivity.class)
+        Intent intent=new Intent(this,BookSearchActivity.class)
                 .putExtra("bookId",id).putExtra("currentChapter",chapter).putExtra("query",searchQuery)
                 .putExtra("caseSensitive",searchCaseSensitive).putExtra("scope",searchScope)
-                .putExtra("searchMode",searchMode).putExtra("nearWindow",searchWindow),REQUEST_SEARCH);
+                .putExtra("searchMode",searchMode).putExtra("nearWindow",searchWindow);
+        TextIndexRegistry.putInto(intent,TextIndexRegistry.current(this,id));
+        startActivityForResult(intent,REQUEST_SEARCH);
     }
 
     @Override protected void onActivityResult(int request,int result,Intent data){
