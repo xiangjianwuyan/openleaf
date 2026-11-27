@@ -4,9 +4,11 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.net.Uri;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.openleaf.reader.core.BackupBookFiles;
 import org.openleaf.reader.core.BackupManifest;
 import org.openleaf.reader.core.ContentContracts;
 
@@ -14,6 +16,7 @@ import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -110,18 +113,48 @@ public final class LibraryBackup {
                 if (!BOOKS.equals(table)) continue;
                 for (FileRecord record : listBookFiles(db)) {
                     File file = new File(context.getFilesDir(), "books/" + record.file);
-                    if (!file.isFile()) {
-                        // 不中止导出（部分备份仍有价值），但必须让用户看见漏了哪本
-                        missingFiles.add(record.title + "（" + record.file + "）");
-                        continue;
+                    String path;
+                    byte[] bytes;
+                    long size;
+                    if (file.isFile()) {
+                        // 本地书：路径、哈希、字节数、条目顺序、进度文案全部保持原样
+                        stage("正在打包书文件 " + record.title);
+                        path = "files/" + record.id + extensionOf(record.file);
+                        bytes = readAll(file);
+                        size = file.length();
+                    } else {
+                        // 本地副本不可用（SAF 引用书的 file 为空，或本地文件被删）：
+                        // 尝试从 SAF 原文件读取内容字节。source_uri 本身仍是设备字段，绝不进备份。
+                        String sourceUri = lookupSourceUri(db, record.id);
+                        byte[] referenced = null;
+                        if (sourceUri != null) {
+                            try {
+                                Uri uri = Uri.parse(sourceUri);
+                                if ("content".equalsIgnoreCase(uri.getScheme()))
+                                    referenced = readUri(context, uri);
+                            } catch (Exception ignored) {
+                                // 授权失效 / 原文件被移动 / 读取异常：与无引用一样按缺失处理
+                            }
+                        }
+                        if (referenced == null) {
+                            // 不中止导出（部分备份仍有价值），但必须让用户看见漏了哪本，
+                            // 且要区分「本地文件缺失」与「SAF 原文件读取失败」。
+                            String reason = (record.file == null || record.file.isEmpty())
+                                    ? "（SAF 原文件读取失败）"
+                                    : "（本地文件缺失；SAF 原文件读取失败）";
+                            missingFiles.add(record.title + reason);
+                            continue;
+                        }
+                        stage("正在打包书文件 " + record.title);
+                        path = "files/" + record.id + BackupBookFiles.extensionFor(
+                                record.file, record.format, record.title);
+                        bytes = referenced;
+                        size = bytes.length;
                     }
-                    stage("正在打包书文件 " + record.title);
-                    String path = "files/" + record.id + extensionOf(record.file);
-                    byte[] bytes = readAll(file);
                     // 书文件以流式写入，先记清单条目（哈希在读流时计算）
                     String hash = ContentContracts.hashHex(new java.io.ByteArrayInputStream(bytes));
                     entries.add(new BackupManifest.Entry(path, BackupManifest.EntryKind.FILE,
-                            hash, file.length(), BackupManifest.Part.ARCHIVE.name()));
+                            hash, size, BackupManifest.Part.ARCHIVE.name()));
                     writeEntry(zip, path, bytes);
                 }
             }
@@ -245,18 +278,44 @@ public final class LibraryBackup {
     }
 
     private static final class FileRecord {
-        final String id, file, title;
-        FileRecord(String id, String file, String title) { this.id = id; this.file = file; this.title = title; }
+        final String id, file, title, format;
+        FileRecord(String id, String file, String title, String format) {
+            this.id = id; this.file = file; this.title = title; this.format = format;
+        }
     }
 
     private List<FileRecord> listBookFiles(SQLiteDatabase db) {
         List<FileRecord> result = new ArrayList<>();
-        Cursor c = db.query("books", new String[]{"id", "file", "title"}, null, null, null, null, null);
+        Cursor c = db.query("books", new String[]{"id", "file", "title", "format"},
+                null, null, null, null, null);
         try {
             while (c.moveToNext()) result.add(new FileRecord(
-                    c.getString(0), c.getString(1), c.getString(2)));
+                    c.getString(0), c.getString(1), c.getString(2), c.getString(3)));
         } finally { c.close(); }
         return result;
+    }
+
+    /** 查 SAF 原文件引用：只在导出端用于读取字节，book_references 整表仍不进备份。 */
+    private String lookupSourceUri(SQLiteDatabase db, String bookId) {
+        if (bookId == null || bookId.isEmpty()) return null;
+        Cursor c = db.query("book_references", new String[]{"source_uri"},
+                "book_id=?", new String[]{bookId}, null, null, null, "1");
+        try {
+            return c.moveToFirst() ? c.getString(0) : null;
+        } finally { c.close(); }
+    }
+
+    /** 从 SAF content:// URI 读取完整字节；失败向上抛，由导出循环计入缺失清单。 */
+    private byte[] readUri(Context context, Uri uri) throws IOException {
+        InputStream raw = context.getContentResolver().openInputStream(uri);
+        if (raw == null) throw new IOException("SAF 输入流为空");
+        try (InputStream in = new BufferedInputStream(raw);
+             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
+            byte[] buf = new byte[BUFFER];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            return out.toByteArray();
+        }
     }
 
     private String extensionOf(String file) {
