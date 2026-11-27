@@ -42,3 +42,22 @@ java -Djava.io.tmpdir=$tmp -cp $tmp FixtureGenerator (Join-Path $root 'validatio
 - MANIFEST.sha256 覆盖 12 个夹具文件；
   不覆盖 `README.md`、`MANIFEST.sha256`、`.gitattributes` 与生成器本体（其哈希见上）。
 - ZIP 使用 STORED + DOS 时间 1980-01-01，避免压缩器与本地时间影响哈希。
+
+## library-1000（B 批 T07 书库性能夹具）
+
+`library-1000/books.json` 为 1000 条**纯元数据**书架条目（id/title/format/sha256/size/added），
+复用 `txt/` 下 5 个合成 TXT 的字节与 SHA-256，不复制、不修改用户真实文件。
+独立生成器与清单：
+
+```powershell
+cd (Join-Path $root 'validation\fixtures\library-1000')
+$tmp = 'C:\Users\Public\openleaf-lib1000-gen'
+javac -encoding UTF-8 --release 17 -d $tmp GenerateLibrary1000.java
+java -cp $tmp GenerateLibrary1000
+cd ..
+sha256sum -c MANIFEST.sha256
+```
+
+`library-1000/MANIFEST.sha256` 覆盖 `library-1000/books.json` 与所引用的 5 个 txt 夹具；
+perf 采样设备/冷定义/20 次中位数与 P95 口径见该目录 `README.md`。
+**基线由 QA 提供；未提供前 1000 本性能门禁 BLOCKED，不填数、不发包。**

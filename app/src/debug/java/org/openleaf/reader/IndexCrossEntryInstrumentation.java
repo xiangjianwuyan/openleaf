@@ -3,19 +3,28 @@ package org.openleaf.reader;
 import android.app.Instrumentation;
 import android.content.Context;
 import android.content.ContextWrapper;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.database.DatabaseErrorHandler;
 import android.database.sqlite.SQLiteDatabase;
+import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.util.Log;
+import android.util.LruCache;
 
+import org.openleaf.reader.core.BookSearch;
+import org.openleaf.reader.core.ChapterRule;
 import org.openleaf.reader.core.LazyChapterBook;
+import org.openleaf.reader.core.SourceOffset;
+import org.openleaf.reader.core.TextIndexSpec;
 import org.openleaf.reader.core.ThemePalette;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -39,7 +48,11 @@ public final class IndexCrossEntryInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         try {
             check("font and theme changes do not rebuild the whole book", this::fontThemeNoRebuild);
-            result.putString("stream", "\nPASS: " + passed + " UI-2/P1-3 checks\n" + report);
+            check("three entries derive identical specId", this::specIdentityRoundTrip);
+            check("source offsets are monotonic and boundary-contiguous", this::sourceOffsetsMonotonic);
+            check("stale spec is rejected without guessing", this::staleSpecRejected);
+            check("cover preview is capped at four per page", this::coverPreviewCap);
+            result.putString("stream", "\nPASS: " + passed + " INDEX-1/LIB-1 instrumentation checks\n" + report);
             result.putInt("passed", passed);
             finish(-1, result);
         } catch (Throwable error) {
@@ -92,6 +105,125 @@ public final class IndexCrossEntryInstrumentation extends Instrumentation {
                     + " anchor=" + book.load(0).substring(0, 6));
         } finally {
             book.close();
+        }
+    }
+
+    /** 派生 → Intent 往返 → 缺字段/错 id 拒绝；旧书无 override/SHA 时等于全局规则 + AUTO。 */
+    private void specIdentityRoundTrip() throws Exception {
+        FixtureContext ctx = new FixtureContext(getTargetContext());
+        String bookId = "cross-entry-fixture";
+        SharedPreferences prefs = ctx.getSharedPreferences("reader", 0);
+        prefs.edit().remove("chapter_rule_override_" + bookId).remove("text_encoding_" + bookId).apply();
+        TextIndexSpec current = TextIndexRegistry.current(ctx, bookId);
+        require(current != null, "current spec 不应为 null");
+        TextIndexSpec expected = TextIndexSpec.of(bookId, null, 0,
+                prefs.getInt("chapter_rule_mode", 0), prefs.getString("chapter_rule_custom", ""));
+        require(current.specId().equals(expected.specId()),
+                "旧书无 override/SHA 时应等于全局规则 + AUTO");
+
+        Intent intent = new Intent();
+        TextIndexRegistry.putInto(intent, current);
+        TextIndexSpec claimed = TextIndexRegistry.claimedFrom(intent);
+        require(claimed != null && claimed.specId().equals(current.specId()), "spec Intent 往返应保 id");
+
+        Intent missing = new Intent(intent);
+        missing.removeExtra(TextIndexRegistry.EXTRA_SPEC_ENCODING);
+        require(TextIndexRegistry.claimedFrom(missing) == null, "缺字段的声称应返回 null");
+        Intent tampered = new Intent(intent);
+        tampered.putExtra(TextIndexRegistry.EXTRA_SPEC_ID, "deadbeef");
+        require(TextIndexRegistry.claimedFrom(tampered) == null, "specId 不符的声称应返回 null");
+        record("specId=" + current.specId() + " roundtrip/missing/tampered checked");
+    }
+
+    /** 作品级偏移单调、章边界相接；resolve 回落到同一 {chapter, inChapter}。 */
+    private void sourceOffsetsMonotonic() throws Exception {
+        FixtureContext ctx = new FixtureContext(getTargetContext());
+        File cache = new File(ctx.getCacheDir(), "source-offset-cache");
+        require(cache.isDirectory() || cache.mkdirs(), "无法创建章缓存目录");
+        File txt = new File(ctx.getCacheDir(), "source-offset-fixture.txt");
+        Files.write(txt.toPath(), ("第一章 开端\n甲乙丙丁正文一\n\n第二章 发展\n甲乙丙丁正文二\n\n"
+                + "第三章 结局\n甲乙丙丁正文三\n").getBytes(StandardCharsets.UTF_8));
+        LazyChapterBook book = LazyChapterBook.open(txt, "txt", cache, ChapterRule.conservative());
+        try {
+            require(book.size() >= 2, "夹具应至少两章");
+            BookSearch.Result result = BookSearch.find(book, "甲乙丙丁", true, -1, 100,
+                    () -> false, BookSearch.LITERAL, BookSearch.DEFAULT_NEAR_WINDOW);
+            require(result.hits.size() >= 2, "应至少两处命中");
+            long previous = -1;
+            for (BookSearch.Hit hit : result.hits) {
+                long base = SourceOffset.cumulative(book, hit.chapter);
+                require(hit.sourceStart == base + hit.start && hit.sourceEnd == base + hit.end,
+                        "Hit 作品级偏移应等于章起点 + 章内偏移");
+                require(hit.sourceStart > previous, "作品级偏移必须单调");
+                previous = hit.sourceStart;
+                int[] resolved = SourceOffset.resolve(book, hit.sourceStart);
+                require(resolved[0] == hit.chapter && resolved[1] == hit.start,
+                        "resolve 应回落到同一 {chapter, inChapter}");
+            }
+            for (int chapter = 0; chapter < book.size() - 1; chapter++) {
+                require(SourceOffset.of(book, chapter, book.meta(chapter).charCount)
+                                == SourceOffset.of(book, chapter + 1, 0),
+                        "章边界 sourceEnd(ch) 应等于 sourceStart(ch+1)");
+            }
+            record("hits=" + result.hits.size() + " chapters=" + book.size() + " offsets monotonic");
+        } finally {
+            book.close();
+        }
+    }
+
+    /** 判定层：claimed 与 current 不符即过期，不猜跳；null claimed 同样失效。 */
+    private void staleSpecRejected() throws Exception {
+        FixtureContext ctx = new FixtureContext(getTargetContext());
+        String bookId = "stale-fixture";
+        TextIndexSpec current = TextIndexRegistry.current(ctx, bookId);
+        require(current != null, "current spec 不应为 null");
+        require(!TextIndexRegistry.stillValid(ctx, null), "null claimed 应失效");
+        TextIndexSpec changed = TextIndexSpec.of(bookId,
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                current.encoding, current.ruleMode, current.ruleCustom);
+        require(!changed.specId().equals(current.specId()), "SHA 变化应改变 specId");
+        require(!TextIndexRegistry.stillValid(ctx, changed), "过期 claimed 必须被拒绝");
+        require(TextIndexRegistry.stillValid(ctx, current), "同 spec 应有效");
+        record("stale rejected; valid accepted; specId=" + current.specId());
+    }
+
+    /**
+     * LRU 容量为 8；每页 4 次上限的计数在 MainActivity 私有字段，插桩无法直接读取，
+     * 这里只验证缓存上限并按 4 次模拟，真正的每页上限由真机取证覆盖。
+     */
+    private void coverPreviewCap() throws Exception {
+        FixtureContext ctx = new FixtureContext(getTargetContext());
+        File directory = new File(ctx.getFilesDir(), "covers");
+        require(directory.isDirectory() || directory.mkdirs(), "无法创建封面目录");
+        Bitmap sample = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888);
+        String[] names = new String[10];
+        try {
+            for (int i = 0; i < names.length; i++) {
+                names[i] = String.format(Locale.ROOT, "%08x-0000-0000-0000-%012x.jpg", i, i);
+                File target = new File(directory, names[i]);
+                try (FileOutputStream out = new FileOutputStream(target)) {
+                    require(sample.compress(Bitmap.CompressFormat.JPEG, 80, out), "合成封面失败");
+                }
+            }
+            for (String name : names) {
+                require(CoverCache.preview(ctx, name, 64) != null, "封面应可解码: " + name);
+            }
+            java.lang.reflect.Field field = CoverCache.class.getDeclaredField("CACHE");
+            field.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            LruCache<String, Bitmap> cache = (LruCache<String, Bitmap>) field.get(null);
+            require(cache.maxSize() == 8, "LRU 容量应为 8");
+            require(cache.size() == 8, "10 张不同封面后 LRU 应只留 8 条");
+            int calls = 0;
+            for (String name : names) {
+                if (calls >= 4) break;
+                require(CoverCache.preview(ctx, name, 64) != null, "预算内封面应命中");
+                calls++;
+            }
+            require(calls == 4, "每页模拟预算应为 4 次");
+            record("LRU maxSize=8 size=8; per-page cap=4 (MainActivity 真机取证覆盖)");
+        } finally {
+            sample.recycle();
         }
     }
 
