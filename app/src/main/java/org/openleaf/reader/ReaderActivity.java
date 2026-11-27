@@ -599,6 +599,15 @@ public final class ReaderActivity extends Activity {
         if (epubBook) { labels.add("图文"); actions.add(this::switchIllustrated); }
         labels.add("标注管理"); actions.add(this::showAnnotations);
         if (isTxt) { labels.add("AI 单章摘要"); actions.add(this::openAiPanel); }
+        // UI-2：频用项与两个子面板入口上提到一级；text/颜色仍复用 changeTextOrTheme 的锚点保留流程。
+        labels.add("字号减小 A−"); actions.add(() -> changeTextOrTheme(
+                () -> fontSize = Math.max(14, fontSize - 2), false));
+        labels.add("字号增大 A＋"); actions.add(() -> changeTextOrTheme(
+                () -> fontSize = Math.min(40, fontSize + 2), false));
+        labels.add("主题：" + ThemePalette.presetName(theme) + "（点击切换）");
+        actions.add(() -> changeTextOrTheme(() -> theme = (theme + 1) % ThemePalette.PRESET_COUNT, true));
+        labels.add("可视选项"); actions.add(this::visualSettings);
+        labels.add("控制选项"); actions.add(this::controlSettings);
         labels.add("阅读设置"); actions.add(this::settings);
         new AlertDialog.Builder(this).setTitle("更多阅读操作")
                 .setItems(labels.toArray(new String[0]), (d, which) -> {
