@@ -2859,7 +2859,7 @@ public final class ReaderActivity extends Activity {
             mode.setEnabled(supportsPaging());
             // A11Y-1: 禁用态也要让 TalkBack 读出原因，不能只靠下方灰色说明文字。
             mode.setContentDescription(supportsPaging()
-                    ? "阅读方式：" + mode.getText() + "，点击切换"
+                    ? "阅读方式：" + (horizontalPages ? "左右分页" : "滚动") + "，点击切换"
                     : "阅读方式不可用：左右分页仅适用于本地 TXT / MD，当前格式不支持");
             motion.setText(horizontalPages ? "翻页动画：" + PAGE_MOTIONS[pageMotion] : "翻页动画（仅左右分页）");
             motion.setEnabled(horizontalPages);
