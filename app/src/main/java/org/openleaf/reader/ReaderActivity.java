@@ -188,6 +188,8 @@ public final class ReaderActivity extends Activity {
     private int searchScope=-1,searchGeneration,searchMode=BookSearch.LITERAL,searchWindow=BookSearch.DEFAULT_NEAR_WINDOW;
     private List<BookSearch.Hit> searchHits=new ArrayList<>();
     private int activeMatch=-1,requestedChapter=-1,requestedStart=-1;
+    /** 产生当前 searchHits 的索引身份；索引重建/外部变更后据此清残留命中。 */
+    private TextIndexSpec searchSpec;
     private Future<?> searchFuture;
     private static final int REQUEST_SEARCH=430, REQUEST_EDIT=431, REQUEST_EXPORT_NOTES=432, REQUEST_IMPORT_NOTES=433;
     private static final int REQUEST_PICK_FONT=434;
@@ -1048,6 +1050,7 @@ public final class ReaderActivity extends Activity {
         if(searchScope<-1||searchScope>=book.size())searchScope=-1;
         requestedChapter=destination;requestedStart=start;
         if(located!=null){requestedChapter=located[0];requestedStart=located[1];}
+        searchSpec=claimed; // 旧结果 claimed==null 时显式清空，保持 0.63 路径
         computeSearch(true);
     }
 
@@ -1143,6 +1146,10 @@ public final class ReaderActivity extends Activity {
     }
 
     private void moveMatch(int direction){
+        // 双保险：任何未走 reopenTextIndex 的 spec 变化（如外部改 prefs）也不让旧命中猜跳。
+        if(searchSpec!=null&&!TextIndexRegistry.stillValid(this,searchSpec)){
+            searchHits=new ArrayList<>();activeMatch=-1;searchSpec=null;updateSearchStatus();return;
+        }
         if(restoring||searchFinding||searchHits.isEmpty())return;
         int index=activeMatch<0?0:(activeMatch+direction+searchHits.size())%searchHits.size();jumpToMatch(index);
     }
@@ -1156,7 +1163,7 @@ public final class ReaderActivity extends Activity {
     private void clearSearch(){
         if(searchFuture!=null)searchFuture.cancel(true);searchGeneration++;searchFinding=false;
         save();int offset=pendingOffset;boolean bottom=pendingBottom;float fraction=pendingLineFraction;
-        searchQuery="";searchHits=new ArrayList<>();activeMatch=-1;restoring=true;
+        searchQuery="";searchHits=new ArrayList<>();activeMatch=-1;searchSpec=null;restoring=true;
         applySearchHighlights();updateSearchStatus();restore(offset,bottom,fraction);
     }
 
@@ -1912,6 +1919,20 @@ public final class ReaderActivity extends Activity {
                 finishIndexChange();
                 book.close();
                 book = fresh;
+                // 索引身份变了就清掉旧搜索命中，保留 searchQuery 让用户知道上次搜了什么。
+                if (searchSpec != null) {
+                    TextIndexSpec current = TextIndexRegistry.current(this, id);
+                    if (current == null || searchSpec.stale(current)) {
+                        if (searchFuture != null) searchFuture.cancel(true);
+                        searchGeneration++;
+                        searchFinding = false;
+                        searchHits = new ArrayList<>();
+                        activeMatch = -1;
+                        searchSpec = null;
+                    } else {
+                        searchSpec = current;
+                    }
+                }
                 progressModel = new ProgressModel(book);
                 int[] mapped = new int[]{oldOffset};
                 if (savedAnchor != null) {
