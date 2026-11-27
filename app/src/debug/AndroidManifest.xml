@@ -5,12 +5,14 @@
             <intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER" /></intent-filter>
         </provider>
     </application>
-    <instrumentation android:name=".LegadoInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
-    <instrumentation android:name=".MediaSourceInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
-    <instrumentation android:name=".BulkImportInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
-    <instrumentation android:name=".PlaybackInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
-    <instrumentation android:name=".StatsInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
-    <instrumentation android:name=".PdfInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
-    <instrumentation android:name=".BackupRoundtripInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
-    <instrumentation android:name=".OnlineUpdateInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <!-- Fully-qualified names: with applicationIdSuffix, a relative name resolves against the
+         suffixed package and the instrumentation class cannot be found. Debug-only manifest. -->
+    <instrumentation android:name="org.openleaf.reader.LegadoInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name="org.openleaf.reader.MediaSourceInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name="org.openleaf.reader.BulkImportInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name="org.openleaf.reader.PlaybackInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name="org.openleaf.reader.StatsInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name="org.openleaf.reader.PdfInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name="org.openleaf.reader.BackupRoundtripInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name="org.openleaf.reader.OnlineUpdateInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
 </manifest>

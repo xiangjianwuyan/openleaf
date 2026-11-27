@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "id": "local.markdown-audit",
+  "name": "Markdown 标题检查",
+  "description": "统计所选文本，只列二级标题的行号和示例。",
+  "capability": "txt-report",
+  "prefixes": ["## "]
+}

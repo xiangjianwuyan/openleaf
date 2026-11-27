@@ -35,6 +35,7 @@
         <activity android:name=".AudioPlayerActivity" android:exported="false" />
         <activity android:name=".TtsActivity" android:exported="false" />
         <activity android:name=".JobsActivity" android:exported="false" />
+        <activity android:name=".PluginActivity" android:exported="false" />
         <activity android:name=".BackupActivity" android:exported="false" />
         <activity android:name=".ComicActivity" android:exported="false" />
         <!-- 听书前台服务：离开界面与锁屏后继续朗读，通知栏可控制 -->

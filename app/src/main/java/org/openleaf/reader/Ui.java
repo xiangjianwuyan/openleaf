@@ -13,7 +13,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 final class Ui {
-    static final int BG=0xFFFAFAF9, INK=0xFF27272A, GREEN=0xFF44403C, MUTED=0xFF78716C;
+    // A11Y-1: MUTED 次级文字需达 WCAG AA 4.5:1。0xFF706A65 对 PANEL(0xFFF2F1EE)=4.72:1、
+    // 对面板底色(0xFFF7F3EA)=4.81:1（原 0xFF78716C 仅 4.25/4.33，低于阈值）；保持暖灰同色相。
+    static final int BG=0xFFFAFAF9, INK=0xFF27272A, GREEN=0xFF44403C, MUTED=0xFF706A65;
     static final int PANEL=0xFFF2F1EE, LINE=0xFFE7E5E4;
     static int dp(Context c,float value){return Math.round(value*c.getResources().getDisplayMetrics().density);}
     static LinearLayout column(Context c){LinearLayout l=new LinearLayout(c);l.setOrientation(LinearLayout.VERTICAL);return l;}
@@ -24,7 +26,7 @@ final class Ui {
     static GradientDrawable outline(Context c,int color,int radius){GradientDrawable d=shape(color,radius,c);d.setStroke(dp(c,1),LINE);return d;}
     static Button button(Context c,String label,Runnable onClick){
         Button b=new Button(c);b.setText(label);b.setTextSize(13);b.setTextColor(INK);b.setAllCaps(false);
-        b.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));b.setMinHeight(dp(c,44));b.setMinimumHeight(dp(c,44));b.setMinWidth(dp(c,44));b.setMinimumWidth(dp(c,44));
+        b.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));b.setMinHeight(dp(c,48));b.setMinimumHeight(dp(c,48));b.setMinWidth(dp(c,48));b.setMinimumWidth(dp(c,48));
         b.setPadding(dp(c,14),dp(c,8),dp(c,14),dp(c,8));b.setStateListAnimator(null);b.setElevation(0);
         b.setBackground(new RippleDrawable(ColorStateList.valueOf(0x18000000),shape(PANEL,9,c),null));
         b.setOnClickListener(v->onClick.run());return b;

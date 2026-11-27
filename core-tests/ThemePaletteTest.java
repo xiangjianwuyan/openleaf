@@ -16,6 +16,8 @@ public final class ThemePaletteTest {
                 ThemePaletteTest::semanticRoleContrast);
         test("clamp 保留 AMOLED 档：clamp(3)=3 / clamp(100)=3 / clamp(-1)=0",
                 ThemePaletteTest::clampPreservesAmoled);
+        test("A11Y-1：MUTED 次级文字在面板底色上达 WCAG AA 4.5:1",
+                ThemePaletteTest::mutedContrastOnPanelSurfaces);
         System.out.println("ThemePaletteTest: " + passed + " checks passed");
     }
 
@@ -166,6 +168,32 @@ public final class ThemePaletteTest {
         equal(ThemePalette.selectedContainer(-5, true), ThemePalette.selectedContainer(0, true));
         equal(ThemePalette.selectedContainer(99, true), ThemePalette.selectedContainer(3, true));
         equal(ThemePalette.selectedContainer(-5, false), ThemePalette.selectedContainer(0, false));
+    }
+
+    /**
+     * A11Y-1：次级说明文字（Ui.MUTED）在设置面板两种底色上的对比度必须达 WCAG AA 4.5:1。
+     *
+     * <p>Ui 类在 app 包且依赖 android.Context，core runner 不引入 android.jar；按 README 的
+     * 「固定色值复制进测试」范式在此内联同一 ARGB 常量，并附 Ui.java 的源行号便于同步。
+     * 面板底色 0xFFF7F3EA 来自 ReaderActivity.showReaderOptions() 的
+     * Color.rgb(247, 243, 234)。阈值断言留 0.1 余量（要求 >=4.6）以防后续微调回退到 4.5 边缘。
+     */
+    private static void mutedContrastOnPanelSurfaces() {
+        final int muted = 0xFF706A65;              // Ui.MUTED（Ui.java）
+        final int panel = 0xFFF2F1EE;              // Ui.PANEL（Ui.java）
+        final int optionsPanel = 0xFFF7F3EA;       // 阅读设置面板底色（showReaderOptions）
+        final double minWithMargin = 4.6;
+
+        double onPanel = ThemePalette.ratio(muted, panel);
+        double onOptions = ThemePalette.ratio(muted, optionsPanel);
+        check(!ThemePalette.lowContrast(muted, panel), "MUTED/PANEL 低于 4.5：" + onPanel);
+        check(!ThemePalette.lowContrast(muted, optionsPanel), "MUTED/面板底色 低于 4.5：" + onOptions);
+        check(onPanel >= minWithMargin, "MUTED/PANEL 未留余量达 4.6：" + onPanel);
+        check(onOptions >= minWithMargin, "MUTED/面板底色 未留余量达 4.6：" + onOptions);
+        // 亮度单调性守门：面板底色更亮，故其对比度必须不低于 PANEL 上的对比度。
+        check(ThemePalette.luminance(optionsPanel) > ThemePalette.luminance(panel)
+                && onOptions > onPanel, "面板底色应比 PANEL 亮且对比度更高");
+        System.out.printf("A11Y-1 muted contrast: on PANEL=%.4f on OPTIONS_PANEL=%.4f%n", onPanel, onOptions);
     }
 
     private interface Case {

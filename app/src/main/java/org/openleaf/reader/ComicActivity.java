@@ -6,11 +6,16 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
+import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -79,7 +84,8 @@ public final class ComicActivity extends Activity {
     private String comicDisplayName;
     private ImageView imageView;      // 单页模式
     private ImageView leftView, rightView; // 双页模式
-    private TextView pageLabel, comicStatus;
+    private TextView comicStatus;
+    private Button pageLabel, autoButton;
     private View dimOverlay;
     private int dimPercent = 100;
     /** 0.43.0：排版三态。旧 doublePage 默认 false（单页），故默认 ALL_SINGLE。 */
@@ -154,17 +160,20 @@ public final class ComicActivity extends Activity {
         dimOverlay.setBackgroundColor(0x00000000);
         stage.addView(dimOverlay, new android.widget.FrameLayout.LayoutParams(-1, -1));
         root.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1f));
-        pageLabel = Ui.text(this, "未载入", 13, Ui.MUTED);
-        root.addView(pageLabel);
         comicStatus = Ui.text(this, "", 12, Ui.MUTED);
+        comicStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         root.addView(comicStatus);
 
         LinearLayout nav = Ui.row(this);
-        prevPageButton = Ui.button(this, "上一页", this::previous, "上一页"); // desc 保持"上一页/下一页"（R-C-11）
-        nextPageButton = Ui.button(this, "下一页", this::next, "下一页");
-        nav.addView(prevPageButton, Ui.weight()); nav.addView(nextPageButton, Ui.weight());
+        prevPageButton = Ui.button(this, "上一页", this::previous);
+        pageLabel = Ui.button(this, "未载入", this::showPageJumpDialog);
+        nextPageButton = Ui.button(this, "下一页", this::next);
+        nav.addView(prevPageButton);
+        nav.addView(pageLabel, Ui.weight());
+        nav.addView(nextPageButton);
         root.addView(nav);
-        LinearLineTools(root);
+        addReaderTools(root);
+        applyNavEnabled();
 
         // Q4：拖入的 CBZ/ZIP 以 setData(uri) 打开；签名校验不通过时不进入阅读器
         android.net.Uri dropped = getIntent() == null ? null : getIntent().getData();
@@ -219,83 +228,138 @@ public final class ComicActivity extends Activity {
         } catch (Exception invalid) { return false; }
     }
 
-    private void LinearLineTools(LinearLayout root) {
+    private void addReaderTools(LinearLayout root) {
         LinearLayout tools = Ui.row(this);
-        Button openComic = Ui.button(this, "打开", this::pickComic); openComic.setContentDescription("打开漫画文件");
-        tools.addView(openComic, Ui.weight());
-        // v2.1：原「排版」三态循环按钮 → 「阅读方式」入口，弹二级面板分别设方向与布局。
-        // 底层仍是 coverMode + rtl 两个字段，切档沿用 alignFirstIndex 保证当前页仍在本屏。
-        layoutButton = Ui.button(this, layoutLabel(), this::showReadingMethodDialog, "阅读方式设置");
+        tools.addView(Ui.button(this, "打开", this::pickComic, "打开漫画文件"));
+        layoutButton = Ui.button(this, "", this::showReadingMethodDialog);
+        updateReadingMethodLabel();
         tools.addView(layoutButton, Ui.weight());
-        Button autoButton = Ui.button(this, "自动", this::toggleAuto);
-        autoButton.setContentDescription("自动阅读开关"); tools.addView(autoButton, Ui.weight());
+        autoButton = Ui.button(this, "自动阅读", this::toggleAuto);
+        tools.addView(autoButton);
         root.addView(tools);
         LinearLayout tools2 = Ui.row(this);
-        Button rtlButton = Ui.button(this, "RTL", () -> { rtl = !rtl; showPage(); });
-        rtlButton.setContentDescription("从右到左阅读"); tools2.addView(rtlButton, Ui.weight());
-        Button dimButton = Ui.button(this, "夜间调光", this::cycleDim);
-        dimButton.setContentDescription("夜间调光档位"); tools2.addView(dimButton, Ui.weight());
-        Button backButton = Ui.button(this, "返回", this::finish);
-        backButton.setContentDescription("返回书架"); tools2.addView(backButton, Ui.weight());
+        tools2.addView(Ui.button(this, "夜间调光", this::cycleDim, "夜间调光档位"), Ui.weight());
+        tools2.addView(Ui.button(this, "清除漫画阅读记录", this::clearComicProgress,
+                "清除本机全部漫画阅读进度"), new LinearLayout.LayoutParams(0, -2, 2f));
+        tools2.addView(Ui.button(this, "返回", this::finish, "返回书架"), Ui.weight());
         root.addView(tools2);
-        LinearLayout tools3 = Ui.row(this);
-        Button clearRecords = Ui.button(this, "清除漫画阅读记录", this::clearComicProgress);
-        clearRecords.setContentDescription("清除本机全部漫画阅读进度");
-        tools3.addView(clearRecords, Ui.weight());
-        root.addView(tools3);
     }
 
-    /**
-     * v2.1：阅读方式二级面板。第一组「方向」对应 rtl，第二组「布局」对应 coverMode 三态；
-     * 两组都直接操作原有字段，不引入新数据模型。当前选中项前缀 ●，点选后关闭面板。
-     */
+    /** 方向和布局各自单选；确认后一次应用，取消不改变当前阅读状态。 */
     private void showReadingMethodDialog() {
-        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this);
-        builder.setTitle("阅读方式");
-        android.widget.LinearLayout panel = Ui.column(this);
-        Ui.pad(panel, 12);
-        panel.addView(Ui.text(this, "方向", 14, Ui.MUTED));
-        LinearLayout dirRow = Ui.row(this);
-        dirRow.addView(choiceButton("从左到右", !rtl, () -> applyRtl(false)), Ui.weight());
-        dirRow.addView(choiceButton("从右到左", rtl, () -> applyRtl(true)), Ui.weight());
-        panel.addView(dirRow);
-        Ui.gap(panel, 10);
-        panel.addView(Ui.text(this, "布局", 14, Ui.MUTED));
-        LinearLayout layRow = Ui.row(this);
-        layRow.addView(choiceButton("单页", coverMode == CoverMode.ALL_SINGLE,
-                () -> applyCoverMode(CoverMode.ALL_SINGLE)), Ui.weight());
-        layRow.addView(choiceButton("双页", coverMode == CoverMode.ALL_DOUBLE,
-                () -> applyCoverMode(CoverMode.ALL_DOUBLE)), Ui.weight());
-        layRow.addView(choiceButton("双页封面单独", coverMode == CoverMode.DOUBLE_NO_COVER,
-                () -> applyCoverMode(CoverMode.DOUBLE_NO_COVER)), Ui.weight());
-        panel.addView(layRow);
-        builder.setView(panel);
-        builder.setNegativeButton("关闭", null);
-        methodDialog = builder.show();
+        stopAuto();
+        LinearLayout panel = Ui.column(this);
+        Ui.pad(panel, 16);
+        panel.addView(Ui.text(this, "阅读方向", 14, Ui.MUTED));
+        RadioGroup directions = new RadioGroup(this);
+        int ltrOption = addReadingChoice(directions, "从左到右");
+        int rtlOption = addReadingChoice(directions, "从右到左");
+        directions.check(rtl ? rtlOption : ltrOption);
+        panel.addView(directions);
+        Ui.gap(panel, 12);
+        panel.addView(Ui.text(this, "页面布局", 14, Ui.MUTED));
+        RadioGroup layouts = new RadioGroup(this);
+        int singleOption = addReadingChoice(layouts, "单页");
+        int doubleOption = addReadingChoice(layouts, "双页");
+        int coverOption = addReadingChoice(layouts, "双页（封面单独显示）");
+        layouts.check(coverMode == CoverMode.ALL_SINGLE ? singleOption
+                : coverMode == CoverMode.DOUBLE_NO_COVER ? coverOption : doubleOption);
+        panel.addView(layouts);
+        if (subChapters.size() > 1 && subChapterIndex >= 0) {
+            Ui.gap(panel, 12);
+            panel.addView(Ui.button(this, "章节 · " + (subChapterIndex + 1) + " / " + subChapters.size(),
+                    () -> { if (methodDialog != null) methodDialog.dismiss(); showSubChapterDialog(); }));
+        }
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(panel);
+        trackReadingDialog(new android.app.AlertDialog.Builder(this)
+                .setTitle("阅读方式")
+                .setView(scroll)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("应用", (dialog, which) -> {
+                    rtl = directions.getCheckedRadioButtonId() == rtlOption;
+                    int layout = layouts.getCheckedRadioButtonId();
+                    coverMode = layout == coverOption ? CoverMode.DOUBLE_NO_COVER
+                            : layout == doubleOption ? CoverMode.ALL_DOUBLE : CoverMode.ALL_SINGLE;
+                    updateReadingMethodLabel();
+                    showPage();
+                }).show(), true);
     }
 
-    /** 面板选项：当前选中项用 ● 标记；点选执行动作后关闭面板。 */
-    private Button choiceButton(String label, boolean selected, Runnable action) {
-        return Ui.button(this, (selected ? "● " : "") + label,
-                () -> { action.run(); dismissMethodDialog(); });
+    private void trackReadingDialog(android.app.Dialog dialog, boolean bottom) {
+        methodDialog = dialog;
+        dialog.setOnDismissListener(ignored -> {
+            if (methodDialog == dialog) methodDialog = null;
+        });
+        if (bottom && dialog.getWindow() != null) {
+            dialog.getWindow().setGravity(android.view.Gravity.BOTTOM);
+        }
     }
 
-    private void dismissMethodDialog() {
-        if (methodDialog != null) { methodDialog.dismiss(); methodDialog = null; }
+    private void showSubChapterDialog() {
+        if (subChapterIndex < 0 || subChapters.size() < 2) return;
+        stopAuto();
+        String[] titles = new String[subChapters.size()];
+        for (int i = 0; i < titles.length; i++) {
+            titles[i] = (i + 1) + " · " + subChapters.get(i).title;
+        }
+        trackReadingDialog(new android.app.AlertDialog.Builder(this)
+                .setTitle("选择章节")
+                .setSingleChoiceItems(titles, subChapterIndex, (dialog, which) -> {
+                    dialog.dismiss();
+                    if (which != subChapterIndex) enterSubChapter(which, comicCurrentUri, true);
+                })
+                .setNegativeButton("关闭", null).show(), true);
     }
 
-    /** 方向：只翻转 rtl，翻页/配页仍走 showPage 原有逻辑。 */
-    private void applyRtl(boolean value) {
-        rtl = value;
-        showPage();
+    private int addReadingChoice(RadioGroup group, String label) {
+        RadioButton choice = new RadioButton(this);
+        choice.setId(View.generateViewId());
+        choice.setText(label);
+        choice.setMinHeight(Ui.dp(this, 48));
+        group.addView(choice);
+        return choice.getId();
     }
 
-    /** 布局：映射到现有 CoverMode 三态，沿用 alignFirstIndex 保证当前页仍在本屏。 */
-    private void applyCoverMode(CoverMode mode) {
-        coverMode = mode;
-        currentPage = ComicSlots.alignFirstIndex(currentPage, coverMode, pageFiles.size());
-        layoutButton.setText(layoutLabel());
-        showPage();
+    /** 输入的是本章真实页号，而不是布局相关的跨页序号。 */
+    private void showPageJumpDialog() {
+        int total = pageFiles.size();
+        if (total == 0) return;
+        int generation = loadGeneration;
+        stopAuto();
+        LinearLayout panel = Ui.column(this);
+        Ui.pad(panel, 16);
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        input.setSingleLine();
+        input.setHint("输入页码（1–" + total + "）");
+        input.setText(Integer.toString(currentPage + 1));
+        input.setSelectAllOnFocus(true);
+        panel.addView(input);
+        android.app.AlertDialog dialog = new android.app.AlertDialog.Builder(this)
+                .setTitle("跳转页码")
+                .setView(panel)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("跳转", null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                if (generation != loadGeneration || pageFiles.isEmpty()) { dialog.dismiss(); return; }
+                int page;
+                try { page = Integer.parseInt(input.getText().toString().trim()); }
+                catch (NumberFormatException invalid) { page = 0; }
+                if (page < 1 || page > total) {
+                    input.setError("请输入 1–" + total + " 之间的页码");
+                    return;
+                }
+                currentPage = page - 1;
+                showPage();
+                dialog.dismiss();
+            });
+        });
+        input.requestFocus();
+        dialog.show();
+        trackReadingDialog(dialog, false);
     }
 
     /** 清除确认走 Dialog（§12 明确交互），成功后进度从 0 起。 */
@@ -309,19 +373,24 @@ public final class ComicActivity extends Activity {
                 }).show();
     }
 
-    /** 自动阅读：启用/暂停切换；启用时按 16ms 帧回调驱动积分器。 */
+    /** 自动阅读按屏翻页，到真正的阅读末端后停止。 */
     private void toggleAuto() {
-        if (pageFiles.isEmpty()) { Toast.makeText(this, "请先打开漫画", Toast.LENGTH_SHORT).show(); return; }
-        autoRunning = !autoRunning;
         if (autoRunning) {
-            autoController.configure(true, 1200, true, true); // 条漫模式 1.2 秒/屏
+            stopAuto();
+        } else if (canGoNext()) {
+            autoRunning = true;
+            autoButton.setText("暂停自动");
+            autoController.configure(true, 1200, false, true);
             lastAutoFrameNanos = 0; autoAccum = 0;
             autoHandler.post(autoTick);
-            Toast.makeText(this, "自动阅读：开", Toast.LENGTH_SHORT).show();
-        } else {
-            autoHandler.removeCallbacks(autoTick);
-            Toast.makeText(this, "自动阅读：暂停", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void stopAuto() {
+        if (!autoRunning) return;
+        autoRunning = false;
+        autoHandler.removeCallbacks(autoTick);
+        autoButton.setText("自动阅读");
     }
 
     private void pickComic() {
@@ -389,9 +458,13 @@ public final class ComicActivity extends Activity {
     }
 
     private void loadComic(Uri uri) {
+        if (isFinishing() || isDestroyed()) return;
         final int gen = ++loadGeneration;
         comicCurrentUri = uri;
+        subChapters = new ArrayList<>();
+        subChapterIndex = -1;
         releasePages();
+        resetPageDisplay("正在载入漫画…");
         // 阶段 2-B 下半场：目录按章节稳定 ID 命名（不再时间戳），为跨章保留 ±1 章打基础。
         // 关键修复：不再无条件删光所有 comic-*（旧实现打开第二章会删掉第一章已解压页）。
         String chapterId = org.openleaf.reader.core.ComicChapters.stableId(
@@ -405,7 +478,6 @@ public final class ComicActivity extends Activity {
             if (restoreSubChapters(target)) {
                 int resumeIdx = subChapterIndex >= 0 && subChapterIndex < subChapters.size() ? subChapterIndex : 0;
                 enterSubChapter(resumeIdx, uri, false);
-                comicStatus.setText("已从缓存打开 · " + subChapters.size() + " 个子章");
                 return;
             }
             java.util.List<File> cached = listPageFiles(target);
@@ -438,7 +510,7 @@ public final class ComicActivity extends Activity {
         pruneCacheDirs(keepIds, gen);
         comicCacheDir = target;
         final File cacheDir = comicCacheDir;
-        if (!cacheDir.mkdirs()) { Toast.makeText(this, "无法创建缓存目录", Toast.LENGTH_SHORT).show(); return; }
+        if (!cacheDir.mkdirs()) { resetPageDisplay("无法创建漫画缓存目录"); return; }
         final Uri finalUri = uri;
         comicStatus.setText("正在载入漫画…");
         loadThread = new Thread(() -> {
@@ -508,7 +580,9 @@ public final class ComicActivity extends Activity {
             }
             final java.util.List<File> zipPages = new ArrayList<>(localPages);
             final java.util.List<String> zipNames = new ArrayList<>(localNames);
-            mainHandler.post(() -> applyLoadedPages(zipPages, zipNames, finalUri));
+            mainHandler.post(() -> {
+                if (gen == loadGeneration) applyLoadedPages(zipPages, zipNames, finalUri);
+            });
         });
         loadThread.start();
     }
@@ -518,7 +592,7 @@ public final class ComicActivity extends Activity {
         if (comicCacheDir != null) saveCachedNames(comicCacheDir, names);
         pageFiles.clear(); pageNames.clear();
         pageFiles.addAll(pages); pageNames.addAll(names);
-        if (pageFiles.isEmpty()) { Toast.makeText(this, "未找到可用图片页", Toast.LENGTH_SHORT).show(); return; }
+        if (pageFiles.isEmpty()) { resetPageDisplay("未找到可用图片页"); return; }
         comicDisplayName = ComicProgressStore.displayNameFor(this, finalUri);
         comicKey = progressStore.keyFor(comicDisplayName, pageFiles.size(), pageNames.get(0));
         int savedPage = progressStore.page(comicKey, pageFiles.size());
@@ -600,17 +674,20 @@ public final class ComicActivity extends Activity {
     /** 进入指定子章：加载该子目录的页到 pageFiles/pageNames 并显示。 */
     private void enterSubChapter(int index, Uri finalUri, boolean showToast) {
         if (index < 0 || index >= subChapters.size()) return;
-        subChapterIndex = index;
         SubChapter sc = subChapters.get(index);
         java.util.List<File> files = listPageFiles(sc.dir);
+        if (files.isEmpty()) {
+            Toast.makeText(this, "该章节没有可用图片页", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        subChapterIndex = index;
         java.util.List<String> names = readCachedNames(sc.dir);
         if (names.size() != files.size()) {
             names = new ArrayList<>();
             for (int i = 0; i < files.size(); i++) names.add(String.format(java.util.Locale.ROOT, "%06d.img", i));
         }
-        pageFiles.clear(); pageNames.clear();
+        releasePages(); // 子章的页索引从 0 开始，不能复用上一章同索引的位图。
         pageFiles.addAll(files); pageNames.addAll(names);
-        if (pageFiles.isEmpty()) return;
         comicDisplayName = ComicProgressStore.displayNameFor(this, finalUri);
         // 子章进度键：书名 + 子章 eid，保证不同子章进度独立
         comicKey = progressStore.keyFor(comicDisplayName + "#" + sc.eid, pageFiles.size(),
@@ -618,9 +695,7 @@ public final class ComicActivity extends Activity {
         int saved = progressStore.page(comicKey, pageFiles.size());
         currentPage = saved > 0 ? Math.min(saved, pageFiles.size() - 1) : 0;
         showPage();
-        comicStatus.setText("第 " + (index + 1) + "/" + subChapters.size() + " 章 · " + sc.title
-                + " · " + pageFiles.size() + " 页");
-        if (showToast) Toast.makeText(this, "检测到 " + subChapters.size() + " 个子章，按目录分章阅读", Toast.LENGTH_SHORT).show();
+        if (showToast) Toast.makeText(this, "第 " + (index + 1) + " 章 · " + sc.title, Toast.LENGTH_SHORT).show();
     }
 
     /** 从缓存目录的 subchapters.json 恢复子章列表；无清单/解析失败返回 false。 */
@@ -775,7 +850,7 @@ public final class ComicActivity extends Activity {
         if (pageFiles.isEmpty()) return;
         comicDisplayName = ComicProgressStore.displayNameFor(this, comicCurrentUri);
         comicKey = progressStore.keyFor(comicDisplayName, pageFiles.size(),
-                String.format(java.util.Locale.ROOT, "%06d.img", 0));
+                pageNames.isEmpty() ? "" : pageNames.get(0));
         int saved = progressStore.page(comicKey, pageFiles.size());
         currentPage = saved > 0 ? Math.min(saved, pageFiles.size() - 1) : 0;
     }
@@ -806,8 +881,8 @@ public final class ComicActivity extends Activity {
 
     private void showPage() {
         if (pageFiles.isEmpty()) return;
-        if (currentPage < 0) currentPage = 0;
-        if (currentPage >= pageFiles.size()) currentPage = pageFiles.size() - 1;
+        // 对齐所有入口（恢复、跳页、切布局），避免从双页的第二张开始漏翻。
+        currentPage = ComicSlots.alignFirstIndex(currentPage, coverMode, pageFiles.size());
         // 0.43.0：本屏索引统一由 ComicSlots 计算（单页 1 张，双页最多 2 张）
         screenIndices = ComicSlots.screenImages(currentPage, pageFiles.size(), coverMode);
         failedSingle = false; failedLeft = false; failedRight = false;
@@ -834,21 +909,25 @@ public final class ComicActivity extends Activity {
         int lastIndex = screenIndices.length > 0 ? screenIndices[screenIndices.length - 1] : currentPage;
         int firstPage = firstIndex + 1;
         int lastPage = lastIndex + 1;
-        String failHint = failureHint(); // v2.1：失败页就地提示，带真实页码
-        if (screenIndices.length != 2) {
-            // 恢复 0.42 单页标签的页名后缀；pageNames 理论上与 pageFiles 等长，仍做越界防御
-            String name = firstIndex >= 0 && firstIndex < pageNames.size() ? pageNames.get(firstIndex) : "";
-            pageLabel.setText(firstPage + " / " + pageFiles.size() + " · " + name + (rtl ? " · 从右到左" : "") + failHint);
-        } else {
-            String range = firstPage == lastPage ? String.valueOf(firstPage) : firstPage + "-" + lastPage;
-            pageLabel.setText(range + " / " + pageFiles.size() + (rtl ? " · 从右到左" : "") + failHint);
-        }
+        String failHint = failureHint();
+        String range = firstPage == lastPage ? String.valueOf(firstPage) : firstPage + "–" + lastPage;
+        String spread = screenIndices.length == 2 ? "双页"
+                : coverMode == CoverMode.DOUBLE_NO_COVER && firstIndex == 0 ? "封面"
+                : coverMode != CoverMode.ALL_SINGLE && firstIndex == pageFiles.size() - 1 ? "单张末页" : "单页";
+        pageLabel.setText(range + " / " + pageFiles.size() + "\n" + spread);
+        pageLabel.setContentDescription("跳转页码：第 " + range + " 页，共 " + pageFiles.size() + " 页，" + spread);
+        String chapter = subChapterIndex >= 0 && subChapters.size() > 1
+                ? "第 " + (subChapterIndex + 1) + " / " + subChapters.size() + " 章" : "";
+        String detail = !failHint.isEmpty() ? failHint
+                : screenIndices.length == 1 && firstIndex < pageNames.size() ? pageNames.get(firstIndex) : "";
+        comicStatus.setText(chapter.isEmpty() ? detail : detail.isEmpty() ? chapter : chapter + " · " + detail);
         // 一次性 Toast：仅在"无失败 → 有失败"跃迁时提醒，自动翻页不反复打扰
         boolean hasFailure = !failHint.isEmpty();
         if (hasFailure && !lastFailureShown)
             Toast.makeText(this, "图片加载失败，点失败页可重试", Toast.LENGTH_SHORT).show();
         lastFailureShown = hasFailure;
-        applyNavEnabled(); // v2.1：首末页翻页禁用
+        if (!canGoNext()) stopAuto();
+        applyNavEnabled();
         applyDim();
         persistProgress();
     }
@@ -886,15 +965,25 @@ public final class ComicActivity extends Activity {
      * 有子章或兄弟章时一律保持 enabled，避免误禁用导致翻不了章。
      */
     private void applyNavEnabled() {
-        if (prevPageButton == null || nextPageButton == null) return;
-        boolean hasPrev = ComicSlots.advanceFirst(currentPage, pageFiles.size(), coverMode, false) >= 0
-                || hasPrevSubChapter() || hasPrevSibling();
-        boolean hasNext = ComicSlots.advanceFirst(currentPage, pageFiles.size(), coverMode, true) >= 0
-                || hasNextSubChapter() || hasNextSibling();
+        boolean loaded = !pageFiles.isEmpty();
+        boolean hasPrev = loaded && (ComicSlots.advanceFirst(currentPage, pageFiles.size(), coverMode, false) >= 0
+                || hasPrevSubChapter() || hasPrevSibling());
+        boolean hasNext = canGoNext();
         prevPageButton.setEnabled(hasPrev);
         nextPageButton.setEnabled(hasNext);
+        pageLabel.setEnabled(loaded);
+        autoButton.setEnabled(hasNext);
         prevPageButton.setAlpha(hasPrev ? 1f : 0.4f);
         nextPageButton.setAlpha(hasNext ? 1f : 0.4f);
+        prevPageButton.setText(loaded && ComicSlots.advanceFirst(currentPage, pageFiles.size(), coverMode, false) < 0
+                && hasPrev ? "上一章" : "上一页");
+        nextPageButton.setText(loaded && ComicSlots.advanceFirst(currentPage, pageFiles.size(), coverMode, true) < 0
+                && hasNext ? "下一章" : "下一页");
+    }
+
+    private boolean canGoNext() {
+        return !pageFiles.isEmpty() && (ComicSlots.advanceFirst(currentPage, pageFiles.size(), coverMode, true) >= 0
+                || hasNextSubChapter() || hasNextSibling());
     }
 
     /** 是否还有上一/下一子章（与 next()/previous() 的 switchSubChapter 口径一致）。 */
@@ -908,11 +997,12 @@ public final class ComicActivity extends Activity {
         return comicSeriesIndex >= 0 && comicSeriesIndex < comicSeries.size() - 1;
     }
 
-    /** 阅读方式按钮文案：保留排版三态可见，方向由页签与面板 ● 标记体现。 */
-    private String layoutLabel() {
-        String mode = coverMode == CoverMode.ALL_SINGLE ? "单页"
-                : coverMode == CoverMode.DOUBLE_NO_COVER ? "双页封面" : "双页";
-        return "阅读方式·" + mode;
+    private void updateReadingMethodLabel() {
+        String direction = rtl ? "从右到左" : "从左到右";
+        String layout = coverMode == CoverMode.ALL_SINGLE ? "单页"
+                : coverMode == CoverMode.DOUBLE_NO_COVER ? "双页·封面单独" : "双页";
+        layoutButton.setText("阅读方式\n" + direction + " · " + layout);
+        layoutButton.setContentDescription("阅读方式：" + direction + "，" + layout);
     }
 
     /** 视觉左页对应的真实索引：RTL 时是本屏第二张，非 RTL 是第一张。 */
@@ -968,6 +1058,22 @@ public final class ComicActivity extends Activity {
         dimOverlay.setBackgroundColor(android.graphics.Color.argb(alpha, 0, 0, 0));
     }
 
+    private void resetPageDisplay(String status) {
+        stopAuto();
+        screenIndices = new int[0];
+        imageView.setImageDrawable(null);
+        leftView.setImageDrawable(null);
+        rightView.setImageDrawable(null);
+        imageView.setVisibility(View.GONE);
+        leftView.setVisibility(View.GONE);
+        rightView.setVisibility(View.GONE);
+        lastFailureShown = false;
+        pageLabel.setText("未载入");
+        pageLabel.setContentDescription(null);
+        comicStatus.setText(status);
+        applyNavEnabled();
+    }
+
     private void releasePages() {
         // 不主动 recycle：ImageView 可能仍持有同一 Bitmap 引用，recycle 会导致绘制崩溃；交给 GC
         bitmapCache.clear();
@@ -1008,7 +1114,8 @@ public final class ComicActivity extends Activity {
     @Override protected void onDestroy() {
         if (zoomDialog != null && zoomDialog.isShowing()) zoomDialog.dismiss(); // 阶段 4：浮层不泄漏
         zoomDialog = null;
-        autoRunning = false;
+        if (methodDialog != null) methodDialog.dismiss();
+        stopAuto();
         loadGeneration++;
         if (loadThread != null) { loadThread.interrupt(); loadThread = null; }
         mainHandler.removeCallbacksAndMessages(null);

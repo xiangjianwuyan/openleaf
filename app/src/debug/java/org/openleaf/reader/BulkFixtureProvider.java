@@ -15,7 +15,10 @@ import java.nio.charset.StandardCharsets;
 
 /** Synthetic documents for opt-in debug instrumentation; never reads personal files. */
 public final class BulkFixtureProvider extends DocumentsProvider {
-    static final String AUTHORITY = "org.openleaf.reader.debugfixtures";
+    // Must match app/src/debug/AndroidManifest.xml (${applicationId}.debugfixtures) and
+    // BookStore.requirePersistentRead (context.getPackageName() + ".debugfixtures").
+    // A hardcoded authority breaks as soon as an applicationIdSuffix is configured.
+    static final String AUTHORITY = BuildConfig.APPLICATION_ID + ".debugfixtures";
     static final byte[] SHARED = "第一章 测试\n\n用于验证同内容异名去重和旧书架迁移。\n".getBytes(StandardCharsets.UTF_8);
     private static final java.util.Set<String> DELETED=java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
     private static final java.util.Set<String> CHANGED=java.util.Collections.synchronizedSet(new java.util.HashSet<String>());

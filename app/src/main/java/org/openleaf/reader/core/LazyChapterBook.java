@@ -78,6 +78,16 @@ public final class LazyChapterBook implements AutoCloseable {
      */
     public static LazyChapterBook open(File file, String format, File cacheDir,
                                        ChapterRule rule, Charset override) throws Exception {
+        return open(file, format, cacheDir, rule, override, 0L);
+    }
+
+    /**
+     * P1-3 CPU 防护：matchBudgetMs 只透传给 TXT/MD 的自定义正则匹配路径；
+     * 0 表示不设预算，既有 4/5 参数重载口径逐字不变。
+     */
+    public static LazyChapterBook open(File file, String format, File cacheDir,
+                                       ChapterRule rule, Charset override,
+                                       long matchBudgetMs) throws Exception {
         if (cacheDir == null || (!cacheDir.isDirectory() && !cacheDir.mkdirs()))
             throw new IOException("无法创建章节缓存目录");
         String kind = format == null ? "" : format.trim().toLowerCase(java.util.Locale.ROOT);
@@ -88,7 +98,8 @@ public final class LazyChapterBook implements AutoCloseable {
         }
         // TXT/MD 走流式索引：不再整本 decode 驻留内存，消除大书打开峰值
         if ("txt".equals(kind) || "md".equals(kind))
-            return openText(file, cacheDir, rule == null ? ChapterRule.conservative() : rule, override);
+            return openText(file, cacheDir, rule == null ? ChapterRule.conservative() : rule,
+                    override, matchBudgetMs);
         // EPUB 走流式索引：逐 spine 写缓存，消除 BookContent 全本驻留（新增唯一分流点）
         if ("epub".equals(kind)) return openEpub(file, cacheDir);
         // MOBI 走流式索引：逐段解码写 UTF-16LE 缓存，消除 BookContent 全本驻留（唯一分流点）
@@ -122,8 +133,8 @@ public final class LazyChapterBook implements AutoCloseable {
 
     /** TXT/MD 流式打开：正文边读边写缓存，只留章节元数据。override 透传给索引器。 */
     private static LazyChapterBook openText(File file, File cacheDir, ChapterRule rule,
-                                            Charset override) throws Exception {
-        TextChapterIndexer.Result indexed = TextChapterIndexer.index(file, cacheDir, rule, override);
+                                            Charset override, long matchBudgetMs) throws Exception {
+        TextChapterIndexer.Result indexed = TextChapterIndexer.index(file, cacheDir, rule, override, matchBudgetMs);
         List<Section> meta = new ArrayList<>(indexed.chapters.size());
         long[] offsets = new long[indexed.chapters.size()];
         int[] lengths = new int[indexed.chapters.size()];

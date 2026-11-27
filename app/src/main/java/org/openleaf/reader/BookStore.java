@@ -589,7 +589,7 @@ public final class BookStore {
         helper.getWritableDatabase().update(TABLE_BOOKS, values, "id=?", new String[]{book.id});
     }
 
-    private String storedHash(String id) throws IOException {
+    String storedHash(String id) throws IOException {
         try(Cursor row=helper.getReadableDatabase().query(TABLE_BOOKS,new String[]{"sha256"},"id=?",new String[]{id},null,null,null,"1")) {
             if(!row.moveToFirst())throw new IOException("书籍已移除");
             return row.isNull(0)?null:row.getString(0);

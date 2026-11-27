@@ -9,10 +9,12 @@ import android.database.DatabaseErrorHandler;
 import android.database.sqlite.SQLiteDatabase;
 import android.net.Uri;
 import android.os.Bundle;
+import android.provider.DocumentsContract;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.openleaf.reader.core.BackupManifest;
+import org.openleaf.reader.core.ContentContracts;
 import org.openleaf.reader.core.MediaAttribution;
 import org.openleaf.reader.core.ReadingAnchor;
 import org.openleaf.reader.core.ReadingLedger;
@@ -23,6 +25,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
@@ -47,6 +50,14 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
     private String targetBookId;
     private byte[] backup;
 
+    // SAF 引用书回归：0.62.0 真机回环失败模式的固定夹具（books.file 为空、字节在 source_uri）。
+    private static final String SAF_BOOK_ID = "saf-fixture-book";
+    private static final String SAF_DOCUMENT_ID = "backup-saf/saf-fixture.txt";
+    private static final String FIXTURE_FOLDER_ID = "backup-fixture-folder";
+    private byte[] safExpectedBytes;
+    private String safExpectedSha;
+    private List<String> safMissing;
+
     private interface Check { void run() throws Exception; }
 
     @Override public void onCreate(Bundle args) { super.onCreate(args); start(); }
@@ -55,12 +66,14 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         try {
             prepare();
-            check("export manifest declares 15 sections at version 4", this::manifestShape);
+            check("export manifest declares " + BackupManifest.DATA_SECTIONS.length
+                    + " sections at version " + BackupManifest.SCHEMA_VERSION, this::manifestShape);
             check("export self-check reports no issue", this::selfCheck);
             check("roundtrip restores book, progress and annotation", this::libraryRoundtrip);
             check("roundtrip restores book and media statistics", this::statsRoundtrip);
             check("restoring the same backup twice keeps totals stable", this::idempotentRestore);
             check("corrupted payload is rejected before commit", this::corruptRejected);
+            check("SAF-referenced book bytes survive export/restore", this::safReferencedBookRoundtrip);
             result.putString("stream", "\nPASS: " + passed + " backup roundtrip checks\n" + report);
             result.putInt("passed", passed);
             finish(-1, result);
@@ -104,22 +117,74 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
         stats.addSeconds(sourceBookId, 90, ReadingLedger.Kind.TEXT, SEGMENT);
         stats.addMediaSeconds(ReadingLedger.Kind.COMIC, MEDIA_KEY, "备份漫画", 60, SEGMENT + 1);
 
+        prepareSafReferencedBook();
+        prepareFolderFixture();
+
+        // SAF 书与本地书放进同一个包：保留原 6 个 check 的目标书不变，同时让 SAF 书走真实导出路径。
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        new LibraryBackup(source, null).export(out, EnumSet.allOf(BackupManifest.Part.class));
+        LibraryBackup writer = new LibraryBackup(source, null);
+        writer.export(out, EnumSet.allOf(BackupManifest.Part.class));
         backup = out.toByteArray();
+        safMissing = writer.missingFiles();
         require(backup.length > 0, "导出为空");
+    }
+
+    /**
+     * 造一本 0.62.0 失败模式下的 SAF 引用书：books.file 为空、字节只在 ContentResolver 可读的
+     * source_uri 里。authority 必须用 provider 常量，isolation 包 suffix 下硬编码会失效。
+     */
+    private void prepareSafReferencedBook() throws Exception {
+        Context context = getTargetContext();
+        Uri safUri = DocumentsContract.buildDocumentUri(
+                BulkFixtureProvider.AUTHORITY, SAF_DOCUMENT_ID);
+        require(safUri != null, "无法构造 SAF 文档 URI");
+        try (InputStream in = context.getContentResolver().openInputStream(safUri)) {
+            require(in != null, "SAF fixture 输入流为空：" + safUri);
+            safExpectedBytes = readAllBytes(in);
+        }
+        require(safExpectedBytes.length > 0, "SAF fixture 字节不应为空");
+        safExpectedSha = ContentContracts.hashHex(safExpectedBytes);
+
+        SQLiteDatabase db = LibraryDatabase.get(source).getWritableDatabase();
+        android.content.ContentValues book = new android.content.ContentValues();
+        book.put("id", SAF_BOOK_ID);
+        book.put("title", "SAF往返样书");
+        book.put("format", "txt");
+        book.put("file", "");
+        book.put("added", SEGMENT + 2);
+        book.put("sha256", safExpectedSha);
+        book.put("order_index", 1);
+        require(db.insert("books", null, book) != -1, "SAF 引用书插入失败");
+        android.content.ContentValues ref = new android.content.ContentValues();
+        ref.put("book_id", SAF_BOOK_ID);
+        ref.put("source_uri", safUri.toString());
+        require(db.insert("book_references", null, ref) != -1, "SAF 引用行插入失败");
+        record("saf sha=" + safExpectedSha.substring(0, 12) + " size=" + safExpectedBytes.length);
+    }
+
+    /** 最小手工文件夹夹具：让 folderIdMap 修复有可验证的行（source_tree/relative_path 导出时会剥离）。 */
+    private void prepareFolderFixture() {
+        android.content.ContentValues folder = new android.content.ContentValues();
+        folder.put("id", FIXTURE_FOLDER_ID);
+        folder.put("name", "备份往返文件夹");
+        folder.put("source_tree", "manual:" + FIXTURE_FOLDER_ID);
+        folder.put("relative_path", "");
+        require(LibraryDatabase.get(source).getWritableDatabase()
+                .insert("folders", null, folder) != -1, "文件夹夹具插入失败");
     }
 
     private void manifestShape() throws Exception {
         JSONObject manifest = new JSONObject(new String(readEntry(backup, "manifest.json"), StandardCharsets.UTF_8));
-        eq(4, manifest.optInt("schemaVersion"), "清单版本应为 4");
+        eq(BackupManifest.SCHEMA_VERSION, manifest.optInt("schemaVersion"),
+                "清单版本应为 " + BackupManifest.SCHEMA_VERSION);
         JSONArray entries = manifest.optJSONArray("entries");
         require(entries != null, "清单缺少 entries");
         int dataCount = 0;
         for (int i = 0; i < entries.length(); i++) {
             if ("DATA".equals(entries.getJSONObject(i).optString("kind"))) dataCount++;
         }
-        eq(15, dataCount, "应有 15 个数据段（含 reader_prefs）");
+        eq(BackupManifest.DATA_SECTIONS.length, dataCount,
+                "应有 " + BackupManifest.DATA_SECTIONS.length + " 个数据段（含 reader_prefs）");
         record("sections=" + dataCount);
     }
 
@@ -186,6 +251,103 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
         record("rejected before commit");
     }
 
+    /**
+     * 0.62.0 真机 FAIL 的可重复回归：SAF「添加文件」的书 books.file 为空、字节只在 source_uri。
+     * 修复前导出判「书文件缺失，已跳过」，空库恢复后这本书打不开；此处逐项断言修复后的行为。
+     */
+    private void safReferencedBookRoundtrip() throws Exception {
+        String safPath = "files/" + SAF_BOOK_ID + ".txt";
+        JSONObject manifest = new JSONObject(new String(readEntry(backup, "manifest.json"), StandardCharsets.UTF_8));
+        JSONArray entries = manifest.optJSONArray("entries");
+        require(entries != null, "清单缺少 entries");
+        BackupManifest.Entry safEntry = null;
+        java.util.Set<String> declaredPaths = new java.util.LinkedHashSet<>();
+        for (int i = 0; i < entries.length(); i++) {
+            JSONObject item = entries.getJSONObject(i);
+            String path = item.optString("path", "");
+            declaredPaths.add(path);
+            if (safPath.equals(path)) {
+                safEntry = new BackupManifest.Entry(path,
+                        "FILE".equals(item.optString("kind"))
+                                ? BackupManifest.EntryKind.FILE : BackupManifest.EntryKind.DATA,
+                        item.optString("sha256", ""), item.optLong("size", -1), item.optString("part", ""));
+            }
+        }
+        require(safEntry != null, "清单缺少 SAF 书文件条目：" + safPath);
+        require(safEntry.kind == BackupManifest.EntryKind.FILE,
+                "SAF 条目类型应为 FILE，实际 " + safEntry.kind);
+        require(safExpectedSha.equalsIgnoreCase(safEntry.sha256),
+                "SAF 条目 sha256 不符：期望 " + safExpectedSha + "，实际 " + safEntry.sha256);
+        eq(safExpectedBytes.length, safEntry.size, "SAF 条目 size 不符");
+        require(safMissing.isEmpty(), "导出不应漏书（0.62 SAF 修复点）：" + safMissing);
+        require(!declaredPaths.contains("data/book_references.json"),
+                "SAF 授权属设备字段，不得在清单中声明");
+        require(!zipEntryNames(backup).contains("data/book_references.json"),
+                "导出包不得包含 data/book_references.json");
+        record("entry=" + safPath + " kind=FILE size=" + safEntry.size + " missing=" + safMissing.size());
+
+        // 取证：区分 (a) 导出没写 SAF 书行 与 (b) books.json 有行但 planIdMap 没映射。
+        JSONObject booksSection = new JSONObject(
+                new String(readEntry(backup, "data/books.json"), StandardCharsets.UTF_8));
+        JSONArray bookRows = booksSection.optJSONArray("rows");
+        require(bookRows != null && bookRows.length() >= 1, "books.json 应至少含一行书");
+        StringBuilder rowsDump = new StringBuilder();
+        boolean safRowPresent = false;
+        for (int i = 0; i < bookRows.length(); i++) {
+            JSONObject row = bookRows.getJSONObject(i);
+            String rowId = row.optString("id", "");
+            if (SAF_BOOK_ID.equals(rowId)) safRowPresent = true;
+            rowsDump.append("{id=").append(rowId)
+                    .append(",sha256=").append(row.optString("sha256", ""))
+                    .append(",file=").append(row.has("file") ? row.optString("file", "") : "<stripped>")
+                    .append("} ");
+        }
+        record("books.json rows=" + rowsDump);
+        LibraryRestore.Preflight plan = restoreIntoFreshTarget();
+        record("bookIdMap.keySet()=" + plan.bookIdMap.keySet());
+        String targetFolderId = plan.folderIdMap.get(FIXTURE_FOLDER_ID);
+        require(targetFolderId != null && !targetFolderId.isEmpty(),
+                "folderIdMap 应含源文件夹 " + FIXTURE_FOLDER_ID + " 的映射，实际 " + plan.folderIdMap.keySet());
+        eq(1L, count(LibraryDatabase.get(target).getReadableDatabase(),
+                "SELECT COUNT(*) FROM folders WHERE id=?", targetFolderId), "目标库应含重映射后的文件夹");
+        record("folderIdMap.keySet()=" + plan.folderIdMap.keySet());
+        record("target books with SAF sha256=" + count(
+                LibraryDatabase.get(target).getReadableDatabase(),
+                "SELECT COUNT(*) FROM books WHERE sha256=?", safExpectedSha));
+        require(safRowPresent, "导出侧 books.json 缺少 SAF 书行（夹具/导出问题）");
+        String targetSafId = plan.bookIdMap.get(SAF_BOOK_ID);
+        require(targetSafId != null && !targetSafId.isEmpty(),
+                "SAF 书未被恢复：books.json 有行但 bookIdMap 没有该源 id 的映射");
+        SQLiteDatabase db = LibraryDatabase.get(target).getReadableDatabase();
+        String restoredFile = null;
+        android.database.Cursor cursor = db.query("books", new String[]{"file"}, "id=?",
+                new String[]{targetSafId}, null, null, null, "1");
+        try { if (cursor.moveToFirst()) restoredFile = cursor.getString(0); }
+        finally { cursor.close(); }
+        require(restoredFile != null, "目标库缺少恢复的 SAF 书");
+        eq(targetSafId + ".txt", restoredFile, "books.file 应为映射后的 <targetId>.txt");
+        eq(0L, count(db, "SELECT COUNT(*) FROM book_references", null),
+                "目标库不应恢复任何 SAF 授权引用行");
+
+        File restored = new File(target.getFilesDir(), "books/" + restoredFile);
+        require(restored.isFile(), "恢复后的 SAF 书文件不存在：" + restored);
+        byte[] actual = java.nio.file.Files.readAllBytes(restored.toPath());
+        require(Arrays.equals(safExpectedBytes, actual), "恢复的 SAF 书字节与源字节不一致");
+        require(safExpectedSha.equals(ContentContracts.hashHex(actual)), "恢复的 SAF 书 SHA 不符");
+
+        BookStore store = new BookStore(target);
+        BookStore.Book book = store.find(targetSafId);
+        require(book != null, "BookStore.find 找不到恢复的 SAF 书");
+        eq(restoredFile, book.file, "BookStore 看到的 books.file 与库不一致");
+        try (BookAccess access = store.open(book)) {
+            byte[] opened = java.nio.file.Files.readAllBytes(access.file.toPath());
+            require(Arrays.equals(safExpectedBytes, opened), "BookStore.open 读回字节不一致");
+            require(safExpectedSha.equals(ContentContracts.hashHex(opened)), "BookStore.open 读回 SHA 不符");
+        }
+        record("targetId=" + targetSafId + " file=" + restoredFile + " bytes=" + actual.length
+                + " opened via BookStore.open (no UI)");
+    }
+
     private LibraryRestore.Preflight restoreIntoFreshTarget() throws Exception {
         target = new FixtureContext(getTargetContext());
         LibraryRestore restore = new LibraryRestore(target, null);
@@ -225,6 +387,24 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
             }
         } finally { zip.close(); }
         throw new Exception("备份缺少条目：" + name);
+    }
+
+    private static java.util.Set<String> zipEntryNames(byte[] zipBytes) throws Exception {
+        java.util.Set<String> names = new java.util.LinkedHashSet<>();
+        ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(zipBytes));
+        try {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) names.add(entry.getName());
+        } finally { zip.close(); }
+        return names;
+    }
+
+    private static byte[] readAllBytes(InputStream in) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int n;
+        while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
+        return out.toByteArray();
     }
 
     private static byte[] replaceEntry(byte[] zipBytes, String name, byte[] replacement) throws Exception {
@@ -271,6 +451,11 @@ public final class BackupRoundtripInstrumentation extends Instrumentation {
 
     private static void eq(long expected, long actual, String message) {
         if (expected != actual) throw new AssertionError(message + "：期望 " + expected + "，实际 " + actual);
+    }
+
+    private static void eq(String expected, String actual, String message) {
+        if (!expected.equals(actual))
+            throw new AssertionError(message + "：期望 " + expected + "，实际 " + actual);
     }
 
     private static final class FixtureContext extends android.content.ContextWrapper {
