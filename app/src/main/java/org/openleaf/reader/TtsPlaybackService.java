@@ -92,10 +92,12 @@ public final class TtsPlaybackService extends Service {
         public final boolean playing, ready, preparing, hasSource;
         public final String title, chapterLabel, sentence, sleepLabel;
         public final int chapter, chapters, index, count, speedIndex;
+        /** 本次会话开书时的索引 specId；null 表示文本朗读/旧路径/已关书。 */
+        public final String specId;
 
         Snapshot(boolean playing, boolean ready, boolean preparing, boolean hasSource,
                  String title, String chapterLabel, String sentence, String sleepLabel,
-                 int chapter, int chapters, int index, int count, int speedIndex) {
+                 int chapter, int chapters, int index, int count, int speedIndex, String specId) {
             this.playing = playing;
             this.ready = ready;
             this.preparing = preparing;
@@ -109,17 +111,20 @@ public final class TtsPlaybackService extends Service {
             this.index = index;
             this.count = count;
             this.speedIndex = speedIndex;
+            this.specId = specId;
         }
     }
 
     private static final Snapshot EMPTY = new Snapshot(false, false, false, false,
-            "", "", "点击「朗读」开始", "睡眠：关", -1, 0, -1, 0, 1);
+            "", "", "点击「朗读」开始", "睡眠：关", -1, 0, -1, 0, 1, null);
 
     public interface Listener { void onTtsState(Snapshot snapshot); }
 
     private static volatile Snapshot snapshot = EMPTY;
     /** 当前服务里载入的书；供阅读页判断是否仍在后台写同一本书的位置。 */
     private static volatile String activeBookId;
+    /** 本次会话开书时的索引身份：暂停/跨章都不重算，关书即失效。 */
+    private volatile TextIndexSpec sessionSpec;
     private static final CopyOnWriteArrayList<Listener> LISTENERS = new CopyOnWriteArrayList<>();
 
     public static Snapshot current() { return snapshot; }
@@ -349,7 +354,8 @@ public final class TtsPlaybackService extends Service {
 
     /** 带 spec 开书：规则/编码按 spec 注入；无 spec 时 3 参重载回落原默认调用。 */
     private void openBook(String id, int startChapter, TextIndexSpec spec) {
-        if (id == null || id.isEmpty()) { pause(); notifyListeners(); return; }
+        if (id == null || id.isEmpty()) { sessionSpec = null; pause(); notifyListeners(); return; }
+        sessionSpec = spec;
         preparing = true;
         playing = false;
         notifyListeners();
@@ -391,12 +397,15 @@ public final class TtsPlaybackService extends Service {
             main.post(() -> {
                 preparing = false;
                 if (loaded == null || passagesOf == null) {
+                    sessionSpec = null;
                     pause();
                     notifyListeners();
                     updateNotification();
                     return;
                 }
                 closeSource();
+                // closeSource 会清理会话 spec；本次开书的快照在换源后恢复，跨章不再重算。
+                sessionSpec = spec;
                 source = loaded;
                 bookId = id;
                 activeBookId = id;
@@ -507,7 +516,7 @@ public final class TtsPlaybackService extends Service {
         catch (RuntimeException invalid) { return false; }
     }
 
-    /** 跨章：后台载入该章正文，回到主线程接上。 */
+    /** 跨章：后台载入该章正文，回到主线程接上。会话快照不换索引：始终用开书时 source 内的 LazyChapterBook。 */
     private void loadChapter(int target, int targetIndex) {
         final Source current = source;
         if (current == null) return;
@@ -751,7 +760,8 @@ public final class TtsPlaybackService extends Service {
                 ? passages.get(index).text : (playing ? "" : "已暂停");
         Snapshot next = new Snapshot(playing, ready, preparing, source != null,
                 source == null ? "" : source.title(), label, sentence, sleepLabel(),
-                chapter, source == null ? 0 : source.chapters(), index, passages.size(), speedIndex);
+                chapter, source == null ? 0 : source.chapters(), index, passages.size(), speedIndex,
+                sessionSpec == null ? null : sessionSpec.specId());
         snapshot = next;
         for (Listener listener : LISTENERS) {
             main.post(() -> {
@@ -772,7 +782,7 @@ public final class TtsPlaybackService extends Service {
     /** 供界面/插桩重置静态快照（进程内单例，服务重启时要清）。 */
     private static void resetStatics() {
         snapshot = new Snapshot(false, false, false, false, "", "", "点击「朗读」开始", "睡眠：关",
-                -1, 0, -1, 0, 1);
+                -1, 0, -1, 0, 1, null);
     }
 
     private void closeSource() {
@@ -780,6 +790,7 @@ public final class TtsPlaybackService extends Service {
             try { source.close(); } catch (RuntimeException ignored) { }
             source = null;
         }
+        sessionSpec = null;
     }
 
     private void stopPlayback() {
