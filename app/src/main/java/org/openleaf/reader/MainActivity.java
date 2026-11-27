@@ -73,6 +73,8 @@ public final class MainActivity extends Activity {
     private String folderId;
     private String folderLabel = ROOT_LABEL;
     private volatile long libraryRequest;
+    // LIB-1：当前页已发起的封面解码次数（含 LRU 命中），每页上限 4。
+    private int coverDecodesThisPage;
     // 容错搜索索引缓存：仅在书库内容签名变化时重建，避免每次查询重新 index()
     private org.openleaf.reader.core.FuzzySearch.Index fuzzyIndex;
     private String fuzzyIndexSignature;
@@ -401,6 +403,8 @@ public final class MainActivity extends Activity {
         importBtn.setContentDescription("导入书籍");
         titleRow.addView(importBtn);
         body.addView(titleRow);Ui.gap(body,20);
+        TextView browseHeader=Ui.text(this,"浏览与筛选",12,Ui.MUTED);
+        browseHeader.setContentDescription("浏览与筛选分组");body.addView(browseHeader);Ui.gap(body,8);
         LinearLayout searchRow=Ui.row(this);
         EditText search=new EditText(this);searchInput=search;search.setSingleLine(true);search.setTextSize(14);search.setTextColor(Ui.INK);search.setHintTextColor(Ui.MUTED);search.setHint("搜索书名、标签…");search.setContentDescription("搜索书名、标签");search.setText(query);search.setBackground(Ui.outline(this,Color.WHITE,10));search.setPadding(Ui.dp(this,16),0,Ui.dp(this,12),0);
         search.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
@@ -748,6 +752,7 @@ public final class MainActivity extends Activity {
                                Map<String, List<String>> tags, BookStore.Book resumeBook, String resumePosition) {
         list.removeAllViews();
         visibleBooks.clear();visibleChecks.clear();
+        coverDecodesThisPage=0; // 每页重置；4 次硬上限只统计真正调用 preview 的卡片
         String summary;
         if (tagsOnly && filter.isEmpty()) summary = "标签搜索";
         else if (searching) summary = (favoritesOnly ? "在珍藏中搜索" : tagsOnly ? "标签搜索" : "全局搜索")
@@ -1048,9 +1053,23 @@ public final class MainActivity extends Activity {
         BookMetadataStore.Card metadata=cardMetadata.get(book.id);
         TextView format=Ui.text(this,(metadata!=null&&metadata.favorite?"★ ":"")+book.format.toUpperCase(Locale.ROOT),10,0xBBFFFFFF);format.setGravity(Gravity.CENTER);cover.addView(format);
         android.widget.FrameLayout coverFrame=new android.widget.FrameLayout(this);coverFrame.setContentDescription("打开 "+book.title);coverFrame.addView(cover,new android.widget.FrameLayout.LayoutParams(-1,-1));
-        if(metadata!=null&&!metadata.coverName.isEmpty()){
-            android.widget.ImageView image=new android.widget.ImageView(this);image.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);image.setContentDescription(book.title+" 封面");coverFrame.addView(image,new android.widget.FrameLayout.LayoutParams(-1,-1));
-            long request=libraryRequest;worker.execute(()->{try{android.graphics.Bitmap bitmap=CoverFiles.preview(this,metadata.coverName,420);runOnUiThread(()->{if(!isDestroyed()&&request==libraryRequest)image.setImageBitmap(bitmap);});}catch(Exception ignored){}});
+        // 缺图 / 预算用尽的占位；成功解码后再隐藏。绑定前先清空 image 防 View 复用残留。
+        TextView placeholder=Ui.text(this,"无封面",11,Ui.MUTED);placeholder.setBackgroundColor(Ui.PANEL);
+        placeholder.setPadding(Ui.dp(this,8),Ui.dp(this,4),Ui.dp(this,8),Ui.dp(this,4));placeholder.setGravity(Gravity.CENTER);
+        coverFrame.addView(placeholder,new android.widget.FrameLayout.LayoutParams(-2,-2,Gravity.CENTER));
+        boolean hasCover=metadata!=null&&!metadata.coverName.isEmpty();
+        if(hasCover&&coverDecodesThisPage<4){
+            coverDecodesThisPage++;
+            final String coverName=metadata.coverName;
+            android.widget.ImageView image=new android.widget.ImageView(this);image.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+            image.setContentDescription(book.title+" 封面");image.setImageBitmap(null);
+            coverFrame.addView(image,new android.widget.FrameLayout.LayoutParams(-1,-1));
+            long request=libraryRequest;worker.execute(()->{try{
+                android.graphics.Bitmap bitmap=CoverCache.preview(this,coverName,420);
+                runOnUiThread(()->{if(!isDestroyed()&&request==libraryRequest&&bitmap!=null){
+                    image.setImageBitmap(bitmap);placeholder.setVisibility(View.GONE);
+                }});
+            }catch(Exception ignored){}});
         }
         boolean wall=hideBookTitles&&!organizing&&gridMode; // 封面墙：只留封面，不改变长按/点击/批量选择语义
         cover.setContentDescription("打开 "+book.title);
