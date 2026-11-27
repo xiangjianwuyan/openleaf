@@ -24,6 +24,8 @@ import org.openleaf.reader.core.LazyChapterBook;
 import org.openleaf.reader.core.ProgressModel;
 import org.openleaf.reader.core.ReadingAnchor;
 import org.openleaf.reader.core.ReadingPace;
+import org.openleaf.reader.core.SourceOffset;
+import org.openleaf.reader.core.TextIndexSpec;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -1018,12 +1020,25 @@ public final class ReaderActivity extends Activity {
         int start=data.getIntExtra("start",-1),end=data.getIntExtra("end",-1);
         if(query==null||query.isEmpty()||query.length()>256||destination<0||destination>=book.size()
                 ||start<0||end<=start||end>book.meta(destination).charCount)return;
+        // 新结果带 spec：先判过期，再按作品级偏移定位；旧结果无 spec 时整段 no-op，保留 0.63 路径。
+        TextIndexSpec claimed=TextIndexRegistry.claimedFrom(data);
+        if(claimed!=null&&!TextIndexRegistry.stillValid(this,claimed)){
+            Toast.makeText(this,TextIndexRegistry.staleMessage(),Toast.LENGTH_SHORT).show();return;
+        }
+        int[] located=null;
+        if(claimed!=null){
+            long sourceStart=data.getLongExtra(TextIndexRegistry.EXTRA_SOURCE_START,-1L);
+            if(sourceStart<0){Toast.makeText(this,TextIndexRegistry.staleMessage(),Toast.LENGTH_SHORT).show();return;}
+            located=SourceOffset.resolve(book,sourceStart);
+            if(located[0]<0){Toast.makeText(this,TextIndexRegistry.staleMessage(),Toast.LENGTH_SHORT).show();return;}
+        }
         searchQuery=query;searchCaseSensitive=data.getBooleanExtra("caseSensitive",false);
         searchScope=data.getIntExtra("scope",-1);
         searchMode=data.getIntExtra("searchMode",BookSearch.LITERAL);
         searchWindow=data.getIntExtra("nearWindow",BookSearch.DEFAULT_NEAR_WINDOW);
         if(searchScope<-1||searchScope>=book.size())searchScope=-1;
         requestedChapter=destination;requestedStart=start;
+        if(located!=null){requestedChapter=located[0];requestedStart=located[1];}
         computeSearch(true);
     }
 

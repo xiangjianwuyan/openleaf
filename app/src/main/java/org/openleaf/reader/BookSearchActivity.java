@@ -28,6 +28,7 @@ import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.Toast;
 import org.openleaf.reader.core.BookParser;
 import org.openleaf.reader.core.BookSearch;
 import org.openleaf.reader.core.ChapterRule;
@@ -156,6 +157,8 @@ public final class BookSearchActivity extends Activity {
         list.setOnItemClickListener((p,v,index,id)->{
             Row row=rows.get(index);
             if(row.header){if(!collapsed.add(row.chapter))collapsed.remove(row.chapter);flatten();}
+            else if(entrySpec!=null&&!TextIndexRegistry.stillValid(this,entrySpec))
+                Toast.makeText(this,TextIndexRegistry.staleMessage(),Toast.LENGTH_SHORT).show();
             else returnHit(row.hitIndex);
         });
     }
