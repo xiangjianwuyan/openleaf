@@ -5,7 +5,11 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 
+import org.openleaf.reader.core.ChapterRule;
+import org.openleaf.reader.core.TextEncoding;
 import org.openleaf.reader.core.TextIndexSpec;
+
+import java.nio.charset.Charset;
 
 /**
  * 文本索引身份注册表（Android 集成层）：只做派生与序列化，不新建任何 prefs / DB 列。
@@ -103,6 +107,38 @@ public final class TextIndexRegistry {
     /** 统一过期文案（T03 再弹 UI，本轮只提供文案）。 */
     public static String staleMessage() {
         return "索引已变化（编码/分章规则/正文已改），请重新查找";
+    }
+
+    /**
+     * spec → 分章规则。档位口径与 ReaderActivity.modeFromIndex() 逐字一致：
+     * ChapterRule.Mode.values()[clamp(mode,0,len-1)]，非法值落保守档。
+     */
+    static ChapterRule ruleOf(TextIndexSpec spec) {
+        ChapterRule.Mode[] modes = ChapterRule.Mode.values();
+        int mode = spec.ruleMode < 0 || spec.ruleMode >= modes.length ? 0 : spec.ruleMode;
+        return ChapterRule.of(modes[mode], spec.ruleCustom);
+    }
+
+    /**
+     * spec → 解码 override。AUTO 返回 null（走原自动检测链）；
+     * UTF-16 读源文件前 2 字节判 BOM，与 ReaderActivity.encodingOverride() 同口径。
+     */
+    static Charset charsetOf(TextIndexSpec spec, java.io.File source) {
+        TextEncoding.Mode mode = TextEncoding.fromIndex(spec.encoding);
+        if (mode == TextEncoding.Mode.AUTO) return null;
+        if (mode == TextEncoding.Mode.UTF_16) {
+            byte[] prefix = new byte[2];
+            int read = 0;
+            try (java.io.InputStream in = new java.io.FileInputStream(source)) {
+                while (read < prefix.length) {
+                    int n = in.read(prefix, read, prefix.length - read);
+                    if (n <= 0) break;
+                    read += n;
+                }
+            } catch (Exception ignored) { /* 读不到前缀就按无 BOM 的 LE 处理 */ }
+            return TextEncoding.resolveUtf16(prefix);
+        }
+        return TextEncoding.charsetOf(mode);
     }
 
     private interface StringSink { void put(String key, String value); }

@@ -30,8 +30,10 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import org.openleaf.reader.core.BookParser;
 import org.openleaf.reader.core.BookSearch;
+import org.openleaf.reader.core.ChapterRule;
 import org.openleaf.reader.core.LazyChapterBook;
 import org.openleaf.reader.core.TextIndexSpec;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -159,11 +161,19 @@ public final class BookSearchActivity extends Activity {
     }
 
     private void loadBook(){
+        final TextIndexSpec spec=entrySpec;
         worker.execute(()->{
             try{
                 BookStore store=new BookStore(this);BookStore.Book record=store.find(bookId);
                 LazyChapterBook parsed;
-                try(BookAccess access=store.open(record)){parsed=LazyChapterBook.open(access.file,record.format,getCacheDir());}
+                try(BookAccess access=store.open(record)){
+                    if(spec==null)parsed=LazyChapterBook.open(access.file,record.format,getCacheDir());
+                    else{
+                        ChapterRule rule=TextIndexRegistry.ruleOf(spec);
+                        Charset charset=TextIndexRegistry.charsetOf(spec,access.file);
+                        parsed=LazyChapterBook.open(access.file,record.format,getCacheDir(),rule,charset);
+                    }
+                }
                 main.post(()->{if(isDestroyed()){parsed.close();return;}book=parsed;currentChapter=Math.max(0,Math.min(currentChapter,book.size()-1));
                     title.setText(record.title);queueSearch(false);});
             }catch(Exception error){main.post(()->{if(!isDestroyed()){title.setText("无法读取书籍");status.setText(error.getMessage()==null?"请返回后重试":error.getMessage());}});}

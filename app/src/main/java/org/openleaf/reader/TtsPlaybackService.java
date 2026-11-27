@@ -298,7 +298,8 @@ public final class TtsPlaybackService extends Service {
         switch (action) {
             case ACTION_START_BOOK:
                 openBook(intent.getStringExtra(EXTRA_BOOK_ID),
-                        Math.max(0, intent.getIntExtra(EXTRA_CHAPTER, 0)));
+                        Math.max(0, intent.getIntExtra(EXTRA_CHAPTER, 0)),
+                        TextIndexRegistry.claimedFrom(intent));
                 break;
             case ACTION_START_TEXT:
                 openText(intent.getStringExtra(EXTRA_TEXT));
@@ -343,6 +344,11 @@ public final class TtsPlaybackService extends Service {
     // ---- 载入 ----
 
     private void openBook(String id, int startChapter) {
+        openBook(id, startChapter, null);
+    }
+
+    /** 带 spec 开书：规则/编码按 spec 注入；无 spec 时 3 参重载回落原默认调用。 */
+    private void openBook(String id, int startChapter, TextIndexSpec spec) {
         if (id == null || id.isEmpty()) { pause(); notifyListeners(); return; }
         preparing = true;
         playing = false;
@@ -360,7 +366,12 @@ public final class TtsPlaybackService extends Service {
                 BookAccess access = store.open(record);
                 LazyChapterBook book = null;
                 try {
-                    book = LazyChapterBook.open(access.file, record.format, getCacheDir());
+                    if (spec == null) {
+                        book = LazyChapterBook.open(access.file, record.format, getCacheDir());
+                    } else {
+                        book = LazyChapterBook.open(access.file, record.format, getCacheDir(),
+                                TextIndexRegistry.ruleOf(spec), TextIndexRegistry.charsetOf(spec, access.file));
+                    }
                     opened = new BookSource(record, access, book);
                 } catch (Exception failed) {
                     if (book != null) book.close();
