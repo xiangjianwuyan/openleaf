@@ -1,6 +1,7 @@
 package org.openleaf.reader;
 
 import org.openleaf.reader.application.ServiceRegistry;
+import org.openleaf.reader.core.UiTokens;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -86,45 +87,60 @@ public final class FolderImportActivity extends Activity {
     }
 
     private void build() {
-        root=Ui.column(this); Ui.mount(this,root); body=Ui.column(this); Ui.pad(body,12); root.addView(body,new LinearLayout.LayoutParams(-1,0,1));
-        heading=Ui.title(this,"批量导入文件夹",21); body.addView(heading);
-        source=Ui.text(this,"尚未选择目录",12,Ui.MUTED);
+        root=Ui.column(this); Ui.mount(this,root,UiTokens.color(UiTokens.Role.BACKGROUND));
+        body=Ui.column(this); Ui.pad(body,UiTokens.spacingDp(UiTokens.Spacing.MD));
+        root.addView(body,new LinearLayout.LayoutParams(-1,0,1));
+        heading=Ui.tokenText(this,"批量导入文件夹",UiTokens.Typography.PAGE_TITLE,UiTokens.Role.PRIMARY);
+        body.addView(heading);
+        source=Ui.tokenText(this,"尚未选择目录",UiTokens.Typography.AUX,UiTokens.Role.PRIMARY);
         source.setMaxLines(1);source.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);body.addView(source);
+        Ui.gap(body,UiTokens.spacingDp(UiTokens.Spacing.SM));
+        // 主操作仅底部「导入选中的文件」一个实心 PRIMARY；其余全部为次操作。
         actions=Ui.row(this);
-        actions.addView(Ui.button(this,"选择文件夹",this::chooseTree),Ui.weight());
-        actions.addView(Ui.button(this,"重扫上次",this::scanLast),Ui.weight());
-        actions.addView(Ui.button(this,"增量差异",this::showDelta),Ui.weight());
-        actions.addView(Ui.button(this,"设置",this::showSettings),Ui.weight());
+        actions.addView(Ui.secondaryToken(this,"选择文件夹",this::chooseTree,"选择要扫描的文件夹"),Ui.weight());
+        actions.addView(Ui.secondaryToken(this,"重扫上次",this::scanLast,"重新扫描上次目录"),Ui.weight());
+        actions.addView(Ui.secondaryToken(this,"增量差异",this::showDelta,"查看媒体库增量差异"),Ui.weight());
+        actions.addView(Ui.secondaryToken(this,"设置",this::showSettings,"打开导入设置"),Ui.weight());
         body.addView(actions);
         LinearLayout settings=Ui.column(this);Ui.pad(settings,16);addImportSettings(settings);
         android.widget.ScrollView settingsScroll=new android.widget.ScrollView(this);settingsScroll.addView(settings);
         settingsDialog=new AlertDialog.Builder(this).setTitle("导入设置").setView(settingsScroll)
                 .setPositiveButton("完成",(d,w)->saveSettings()).create();
-        filter=new Spinner(this); String[] filters={"全部格式","TXT","EPUB","PDF"}; filter.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,filters)); filter.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> p){} public void onItemSelected(android.widget.AdapterView<?> p,View v,int pos,long id){if(adapter!=null){adapter.filter=pos==0?"":filters[pos].toLowerCase(Locale.ROOT);adapter.refresh();renderSummary();}}}); body.addView(filter); body.addView(Ui.text(this,"筛选只改变显示；导入全部已勾选文件。",12,Ui.MUTED)); Ui.gap(body,6);
+        filter=new Spinner(this); String[] filters={"全部格式","TXT","EPUB","PDF"}; filter.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,filters)); filter.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> p){} public void onItemSelected(android.widget.AdapterView<?> p,View v,int pos,long id){if(adapter!=null){adapter.filter=pos==0?"":filters[pos].toLowerCase(Locale.ROOT);adapter.refresh();renderSummary();}}}); body.addView(filter);
+        body.addView(Ui.tokenText(this,"筛选只改变显示；导入全部已勾选文件。",UiTokens.Typography.AUX,UiTokens.Role.PRIMARY));
+        Ui.gap(body,UiTokens.spacingDp(UiTokens.Spacing.SM));
         // P1-1：可见集合与全局集合分别给按钮，避免两个含义共用一个「全选」。窄屏拆成两行，
-        // 简短标签 + contentDescription 兼顾布局与 TalkBack。
+        // 简短标签 + contentDescription 兼顾布局与 TalkBack；均为次操作。
         LinearLayout selectVisible=Ui.row(this);
-        selectVisible.addView(Ui.button(this,"全选当前",()->setAll(true,true),"全选当前结果：只勾选当前筛选可见的候选"),Ui.weight());
-        selectVisible.addView(Ui.button(this,"取消当前",()->setAll(false,true),"取消当前结果：只取消当前筛选可见的候选"),Ui.weight());
-        body.addView(selectVisible); Ui.gap(body,4);
+        selectVisible.addView(Ui.secondaryToken(this,"全选当前",()->setAll(true,true),"全选当前结果：只勾选当前筛选可见的候选"),Ui.weight());
+        selectVisible.addView(Ui.secondaryToken(this,"取消当前",()->setAll(false,true),"取消当前结果：只取消当前筛选可见的候选"),Ui.weight());
+        body.addView(selectVisible); Ui.gap(body,UiTokens.spacingDp(UiTokens.Spacing.XS));
         LinearLayout selectAll=Ui.row(this);
-        selectAll.addView(Ui.button(this,"全选全部",()->setAll(true,false),"选中全部文件：勾选所有候选（含被筛选隐藏的候选），跳过 0 字节文件"),Ui.weight());
-        selectAll.addView(Ui.button(this,"清空全部",()->setAll(false,false),"清空全部选择：取消所有候选的勾选（含被筛选隐藏的候选）"),Ui.weight());
-        body.addView(selectAll); Ui.gap(body,6);
-        summary=Ui.text(this,"尚未扫描",13,Ui.MUTED); body.addView(summary); status=Ui.text(this,"",13,Ui.GREEN); status.setMaxLines(2);status.setEllipsize(android.text.TextUtils.TruncateAt.END);body.addView(status);
-        importProgress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);importProgress.setMax(1000);importProgress.setVisibility(View.GONE);importProgress.setContentDescription("当前文件导入进度");body.addView(importProgress,new LinearLayout.LayoutParams(-1,Ui.dp(this,6)));
-        errors=Ui.text(this,"",12,Ui.MUTED); errors.setMaxLines(3); errors.setEllipsize(android.text.TextUtils.TruncateAt.END); errors.setOnClickListener(v->{if(task.errorText().length()>0)new AlertDialog.Builder(this).setTitle("扫描与导入详情").setMessage(task.errorText()).setPositiveButton("知道了",null).show();}); body.addView(errors); Ui.gap(body,4);
+        selectAll.addView(Ui.secondaryToken(this,"全选全部",()->setAll(true,false),"选中全部文件：勾选所有候选（含被筛选隐藏的候选），跳过 0 字节文件"),Ui.weight());
+        selectAll.addView(Ui.secondaryToken(this,"清空全部",()->setAll(false,false),"清空全部选择：取消所有候选的勾选（含被筛选隐藏的候选）"),Ui.weight());
+        body.addView(selectAll); Ui.gap(body,UiTokens.spacingDp(UiTokens.Spacing.SM));
+        // N/M/K/H 计数与状态：SURFACE 卡 + AUX 次级文字（4.88:1，不碰 SOFT）。
+        LinearLayout countCard=Ui.tokenCard(this,UiTokens.Role.SURFACE,UiTokens.Radius.CARD);
+        int cardPad=UiTokens.spacingDp(UiTokens.Spacing.MD);
+        countCard.setPadding(cardPad,cardPad,cardPad,cardPad);
+        summary=Ui.tokenText(this,"尚未扫描",UiTokens.Typography.AUX,UiTokens.Role.SECONDARY);
+        countCard.addView(summary);
+        status=Ui.tokenText(this,"",UiTokens.Typography.AUX,UiTokens.Role.ACCENT);
+        status.setMaxLines(2);status.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        countCard.addView(status);
+        importProgress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);importProgress.setMax(1000);importProgress.setVisibility(View.GONE);importProgress.setContentDescription("当前文件导入进度");countCard.addView(importProgress,new LinearLayout.LayoutParams(-1,Ui.dp(this,6)));
+        Ui.gap(countCard,UiTokens.spacingDp(UiTokens.Spacing.SM));
+        errors=Ui.tokenText(this,"",UiTokens.Typography.AUX,UiTokens.Role.SECONDARY);
+        errors.setMaxLines(3); errors.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        errors.setOnClickListener(v->{if(task.errorText().length()>0)new AlertDialog.Builder(this).setTitle("扫描与导入详情").setMessage(task.errorText()).setPositiveButton("知道了",null).show();});
+        countCard.addView(errors);body.addView(countCard);
         list=new ListView(this); list.setDivider(null); adapter=new CandidateAdapter(this); list.setAdapter(adapter); body.addView(list,new LinearLayout.LayoutParams(-1,0,1));
-        LinearLayout footer=Ui.row(this);Ui.pad(footer,8);
-        Button stop=Ui.button(this,"停止任务",()->{if(task.running())task.cancel();else toast("当前没有运行中的任务");});
+        LinearLayout footer=Ui.row(this);Ui.pad(footer,UiTokens.spacingDp(UiTokens.Spacing.SM));
+        Button stop=Ui.secondaryToken(this,"停止任务",()->{if(task.running())task.cancel();else status.setText("当前没有运行中的任务");},"停止当前导入任务");
         footer.setMinimumHeight(Ui.dp(this,64));
-        stop.setMinHeight(Ui.dp(this,52));
         footer.addView(stop,new LinearLayout.LayoutParams(-2,Ui.dp(this,52)));
-        importButton=Ui.button(this,"导入选中的文件",this::startImport);
-        importButton.setTextColor(android.graphics.Color.WHITE);
-        importButton.setBackground(Ui.shape(Ui.GREEN,14,this));
-        importButton.setMinHeight(Ui.dp(this,52));
-        importButton.setContentDescription("导入选中的文件");
+        // 唯一实心 PRIMARY；未选文件由 renderSummary 禁用并就地解释原因。
+        importButton=Ui.primaryToken(this,"导入选中的文件",this::startImport,"导入选中的文件");
         footer.addView(importButton,new LinearLayout.LayoutParams(0,Ui.dp(this,52),1));
         root.addView(footer,new LinearLayout.LayoutParams(-1,-2));
     }
@@ -223,23 +239,28 @@ public final class FolderImportActivity extends Activity {
     private boolean hasPermission(Uri uri){for(android.content.UriPermission p:getContentResolver().getPersistedUriPermissions())if(uri.equals(p.getUri())&&p.isReadPermission())return true;return false;}
     private void beginScan(Uri uri){saveSettings();synchronized(task.dataLock){task.enabledFormats.clear();if(epubFormat.isChecked())task.enabledFormats.add("epub");if(pdfFormat.isChecked())task.enabledFormats.add("pdf");if(txtFormat.isChecked())task.enabledFormats.add("txt");task.maxBytes=maxBytes();task.groupFolders=groupFolders.isChecked();}task.startScan(uri,getApplicationContext().getContentResolver());render();}
     private void startImport(){
-        if(task.running()){toast("任务已在进行");return;}
+        if(task.running()){status.setText("任务已在进行");return;}
         final int count=task.selectedCount();
-        if(count==0){toast("请至少选择一个文件");return;}
-        if(task.sourceTree==null||!hasPermission(task.sourceTree)){toast("目录长期读取授权已失效，请重新选择文件夹；不会复制导入");return;}
+        // 未选/授权失效就地说明（status 常驻），不用 Toast 作唯一持续状态。
+        if(count==0){renderSummary();status.setText("尚未选择文件：勾选文件或用「全选当前 / 全选全部」后再导入。");return;}
+        if(task.sourceTree==null||!hasPermission(task.sourceTree)){status.setText("目录长期读取授权已失效，请重新选择文件夹；不会复制导入");return;}
         long size=0;
         for(DirectoryScanner.Candidate c:task.snapshotCandidates()) if(task.isSelected(c)&&c.size>0) size+=c.size;
         LinearLayout view=Ui.column(this);Ui.pad(view,20);
         CheckBox group=check("同时导入目录分组信息",getSharedPreferences(PREFS,0).getBoolean("group",true));
         group.setContentDescription("同时导入目录分组信息");
         view.addView(group);
-        view.addView(Ui.text(this,"关闭后，所选文件会直接放在导入文件夹的直接层级。",12,Ui.MUTED));
+        view.addView(Ui.tokenText(this,"关闭后，所选文件会直接放在导入文件夹的直接层级。",UiTokens.Typography.AUX,UiTokens.Role.PRIMARY));
         confirmDialog=new AlertDialog.Builder(this).setTitle("导入确认")
                 .setMessage("将导入 "+count+" 个文件"+(size>0?"，约 "+sizeText(size):"")+"。")
                 .setView(view).setNegativeButton("取消",null)
                 .setPositiveButton("确认",(d,w)->{
-                    if(task.running()){toast("任务已在进行");return;}
-                    if(task.sourceTree==null||!hasPermission(task.sourceTree)){toast("目录长期读取授权已失效，请重新选择文件夹；不会复制导入");return;}
+                    // 提交当下重新读取已选集合与分组选项，不沿用弹层打开时的快照。
+                    if(task.running()){status.setText("任务已在进行");return;}
+                    int fresh=task.selectedCount();
+                    if(fresh==0){renderSummary();status.setText("提交时已无选中文件，未执行导入。");return;}
+                    if(fresh!=count){renderSummary();status.setText("选择已变化（原 "+count+" 项，现 "+fresh+" 项），请重新确认。");return;}
+                    if(task.sourceTree==null||!hasPermission(task.sourceTree)){status.setText("目录长期读取授权已失效，请重新选择文件夹；不会复制导入");return;}
                     synchronized(task.dataLock){task.groupFolders=group.isChecked();}
                     getSharedPreferences(PREFS,0).edit().putBoolean("group",group.isChecked()).apply();
                     if(groupFolders!=null) groupFolders.setChecked(group.isChecked());
@@ -278,7 +299,8 @@ public final class FolderImportActivity extends Activity {
         final boolean stopped = task.cancelled;
         final String title = stopped ? "导入已取消" : "导入完成";
         final String summary = (stopped ? "已取消 · " : "")
-                + "已添加 " + task.added + " · 重复 " + task.duplicates + " · 失败 " + task.failed;
+                + "成功 " + task.added + " · 已存在 " + task.duplicates + " · 失败 " + task.failed
+                + " · 未处理 " + Math.max(0, task.total - task.processed);
         if (task.failed <= 0) {
             task.resultShown = true;
             // 全重复必须单独说明：「已添加 0」很容易被读成"一本都没导入，坏了"。
@@ -414,7 +436,8 @@ public final class FolderImportActivity extends Activity {
     }
     private void renderImportSummary(){
         if(summary!=null)summary.setText("已选 "+task.total+" 项 · 正在导入 "+Math.min(task.processed+1,task.total)+" / "+task.total
-                +"\n已添加 "+task.added+" · 重复 "+task.duplicates+" · 失败 "+task.failed);
+                +"\n成功 "+task.added+" · 已存在 "+task.duplicates+" · 失败 "+task.failed
+                +" · 未处理 "+Math.max(0,task.total-task.processed));
         renderProgress();
     }
     private void renderProgress(){
@@ -443,12 +466,20 @@ public final class FolderImportActivity extends Activity {
                 if(c.size<0)unknown++;else size+=c.size;
             }
         }
-        summary.setText("发现 "+task.candidateCount()+" · 当前筛选 "+visible+" · 已选 "+count+"（含隐藏 "+hidden+"）· "+sizeText(size)
-                +(unknown==0?"":"（另 "+unknown+" 项大小未知）")
-                +"\n已添加 "+task.added+" · 重复 "+task.duplicates+" · 失败 "+task.failed);
+        // N 发现 / M 当前筛选 / K 已选 / H 隐藏选中：全部来自真实候选集合，不做演示占位。
+        String counts="发现 "+task.candidateCount()+" 个文件 · 当前筛选 "+visible+" · 已选 "+count
+                +"（含隐藏 "+hidden+"）· "+sizeText(size)
+                +(unknown==0?"":"（另 "+unknown+" 项大小未知）");
+        // 结果四类：成功 / 已存在 / 失败 / 未处理；取消是批次状态，不计入解析失败。
+        String result="成功 "+task.added+" · 已存在 "+task.duplicates+" · 失败 "+task.failed
+                +" · 未处理 "+Math.max(0,task.total-task.processed);
+        String hint=task.candidateCount()==0?"尚未扫描，请先选择文件夹。"
+                :count==0?"尚未选择文件：勾选文件或用「全选当前 / 全选全部」。":"";
+        summary.setText(counts+"\n"+result+(hint.isEmpty()?"":"\n"+hint));
         if(importButton!=null){
             importButton.setText(task.importing?"正在导入…":task.scanning?"正在扫描…":"导入选中的文件（"+count+"）");
-            importButton.setEnabled(!task.running());
+            // 未选禁用并就地解释（见 hint），不用 Toast 作唯一持续状态。
+            importButton.setEnabled(!task.running()&&count>0);
         }
     }
     private String sizeText(long size){if(size<0)return "大小未知";if(size<1024)return size+" B";if(size<1024*1024)return (size/1024)+" KB";return (size/(1024*1024))+" MB";}
@@ -572,10 +603,12 @@ public final class FolderImportActivity extends Activity {
         public long getItemId(int p){return p;}
         public View getView(int p,View convert,android.view.ViewGroup parent){
             LinearLayout row=convert instanceof LinearLayout?(LinearLayout)convert:Ui.row(context);
-            if(convert==null){CheckBox box=new CheckBox(context);box.setTag("check");row.addView(box);LinearLayout info=Ui.column(context);info.setTag("info");row.addView(info,new LinearLayout.LayoutParams(0,-2,1));Ui.pad(row,4);}
+            if(convert==null){CheckBox box=new CheckBox(context);box.setTag("check");row.addView(box);LinearLayout info=Ui.column(context);info.setTag("info");row.addView(info,new LinearLayout.LayoutParams(0,-2,1));Ui.pad(row,4);
+                // 文件行 SURFACE 底：相对路径/状态等次级文字只能落在 SURFACE 上（4.88:1）。
+                row.setBackground(Ui.shape(UiTokens.color(UiTokens.Role.SURFACE),UiTokens.radiusDp(UiTokens.Radius.CARD),context));}
             CheckBox box=(CheckBox)row.findViewWithTag("check");LinearLayout info=(LinearLayout)row.findViewWithTag("info");
             DirectoryScanner.Candidate c=(DirectoryScanner.Candidate)getItem(p);if(c==null)return row;
-            info.removeAllViews();info.addView(Ui.text(context,c.name,15,Ui.INK));
+            info.removeAllViews();info.addView(Ui.tokenText(context,c.name,UiTokens.Typography.BODY,UiTokens.Role.PRIMARY));
             String detail=c.relativePath+"  ·  "+c.format.toUpperCase(Locale.ROOT)+"  ·  "+sizeText(c.size);
             // P1-1：副文案前给明确状态词，复用既有扫描字段，不改 Candidate 数据结构。
             String statusWord,statusDetail;
@@ -585,7 +618,7 @@ public final class FolderImportActivity extends Activity {
             else if(c.size>task.maxBytes){statusWord="超过默认阈值";statusDetail="超出默认勾选阈值；可手动勾选";}
             else{statusWord="可导入";statusDetail="符合当前格式与大小规则";}
             detail+="\n"+statusWord+"："+statusDetail;
-            info.addView(Ui.text(context,detail,12,Ui.MUTED));
+            info.addView(Ui.tokenText(context,detail,UiTokens.Typography.AUX,UiTokens.Role.SECONDARY));
             box.setOnCheckedChangeListener(null);box.setChecked(task.isSelected(c));box.setEnabled(!task.running());
             box.setOnCheckedChangeListener((button,checked)->{synchronized(task.dataLock){task.selected.put(c.uri.toString(),checked);}renderSummary();});
             return row;

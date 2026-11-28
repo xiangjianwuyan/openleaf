@@ -3,6 +3,8 @@ package org.openleaf.reader;
 import org.openleaf.reader.application.ServiceRegistry;
 import org.openleaf.reader.core.DropBatch;
 import org.openleaf.reader.core.ImportUseCase;
+import org.openleaf.reader.core.ResolvedContinueReading;
+import org.openleaf.reader.core.UiTokens;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -62,6 +64,10 @@ public final class MainActivity extends Activity {
     private boolean hideBookTitles=false;
     private boolean wide(){return getResources().getConfiguration().screenWidthDp>=720;}
     private EditText searchInput;
+    /** v3 续读主卡插槽：位于搜索之后、浏览范围之前；由 renderShelf 的 worker 异步填充。 */
+    private LinearLayout resumeSlot;
+    /** 标题栏导入按钮：有可靠续读时降次操作，空库时升唯一主操作。 */
+    private Button importButton;
     // 搜索防抖：快速输入时合并为一次书库渲染，避免每次按键都 removeAllViews + 入队
     private final android.os.Handler mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private LinearLayout shelfList;
@@ -310,7 +316,7 @@ public final class MainActivity extends Activity {
     }
 
     private void shell() {
-        root=Ui.column(this); Ui.mount(this,root);
+        root=Ui.column(this); Ui.mount(this,root,UiTokens.color(UiTokens.Role.BACKGROUND));
         root.setOnDragListener(this::onDrag); // 拖拽批量导入落点（第二入口，不改 SAF 多选链路）
         LinearLayout workspace=Ui.row(this);workspace.setGravity(Gravity.TOP);
         root.addView(workspace,new LinearLayout.LayoutParams(-1,0,1));
@@ -329,19 +335,40 @@ public final class MainActivity extends Activity {
             TextView brand=Ui.title(this,"◫  OpenLeaf",24);Ui.pad(brand,8);navigation.addView(brand);
             TextView caption=Ui.text(this,"青简 · 我的阅读空间",12,Ui.MUTED);Ui.pad(caption,8);navigation.addView(caption);Ui.gap(navigation,32);
         }
+        // v3 §3.10：5 项标签、路由、contentDescription、返回栈逐字不变；只修竖排。
         String[] labels={"▤  书库","◎  发现","✧  想法","▦  记录","⚙  关于"};
+        String[] narrowLabels={"▤书库","◎发现","✧想法","▦记录","⚙关于"};
         String[] descs={"切换到书库","切换到在线发现","打开想法","打开阅读记录","切换到关于"};
         for(int i=0;i<labels.length;i++){
             final int selected=i>3?i-2:i;
+            String text=wide()?labels[i]:narrowLabels[i]; // 窄屏去双空格，宽屏保留原文
             Button item;
-            if(i==2) item=Ui.button(this,labels[i],()->startActivity(new Intent(this,IdeasActivity.class)),descs[i]);
-            else if(i==3) item=Ui.button(this,labels[i],()->startActivity(new Intent(this,StatsActivity.class)),descs[i]);
-            else item=Ui.button(this,labels[i],()->{tab=selected;show();},descs[i]);
-            // 选中态容器色：书架固定用 Ui 全局色，宽屏浅底 / 窄屏 INK 高对比，刻意不随主题映射。
-            if(i!=2&&i!=3&&tab==selected){item.setBackground(Ui.shape(wide()?0xFFE3E1DC:Ui.INK,9,this));if(!wide())item.setTextColor(Color.WHITE);}
+            if(i==2) item=Ui.button(this,text,()->startActivity(new Intent(this,IdeasActivity.class)),descs[i]);
+            else if(i==3) item=Ui.button(this,text,()->startActivity(new Intent(this,StatsActivity.class)),descs[i]);
+            else item=Ui.button(this,text,()->{tab=selected;show();},descs[i]);
+            // 单行：大字号倍率下 ellipsize(END) 只截视觉，读屏 desc 仍完整。
+            item.setTextSize(UiTokens.textSizeSp(UiTokens.Typography.TAB_LABEL));
+            item.setSingleLine(true);item.setMaxLines(1);
+            item.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            item.setMinWidth(Ui.dp(this,48));item.setMinimumWidth(Ui.dp(this,48));
+            item.setPadding(Ui.dp(this,4),Ui.dp(this,2),Ui.dp(this,4),Ui.dp(this,2));
+            item.setTextColor(UiTokens.color(UiTokens.Role.PRIMARY));
+            // 选中态：accent 文字 + accent-soft 14dp 圆角底；图标字形与 medium 字重并用，不靠颜色 alone。
+            if(i!=2&&i!=3&&tab==selected){
+                item.setBackground(Ui.shape(UiTokens.color(UiTokens.Role.ACCENT_SOFT),
+                        UiTokens.radiusDp(UiTokens.Radius.TAB_SELECTED),this));
+                item.setTextColor(UiTokens.color(UiTokens.Role.ACCENT));
+                item.setTypeface(android.graphics.Typeface.create(
+                        UiTokens.fontFamily(UiTokens.Typography.TAB_LABEL),android.graphics.Typeface.BOLD));
+            }
             if(wide()){
-                item.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,Ui.dp(this,48));lp.bottomMargin=Ui.dp(this,6);navigation.addView(item,lp);
-            }else navigation.addView(item,Ui.weight());
+                item.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+                LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,Ui.dp(this,56));
+                lp.bottomMargin=Ui.dp(this,6);navigation.addView(item,lp);
+            }else{
+                // weight=1 均分；setMinWidth 保证 48dp 下限，不再用 Ui.weight() 的 WRAP_CONTENT 压缩双字。
+                navigation.addView(item,new LinearLayout.LayoutParams(0,Ui.dp(this,56),1));
+            }
         }
         if(wide()){
             Ui.gap(navigation,28);TextView label=Ui.text(this,"我的收藏",11,Ui.MUTED);Ui.pad(label,8);navigation.addView(label);
@@ -400,35 +427,37 @@ public final class MainActivity extends Activity {
     private void library() {
         LinearLayout body = content();
         LinearLayout titleRow=Ui.row(this);
-        titleRow.addView(Ui.title(this,"书库",28),Ui.weight());
-        Button importBtn=Ui.primary(this,"＋ 导入",()->new AlertDialog.Builder(this).setTitle("导入书籍").setItems(new String[]{"添加文件（含标签与书评书包）","扫描文件夹"},(d,which)->{if(which==0)pickFiles();else startActivity(new Intent(this,FolderImportActivity.class));}).show());
-        importBtn.setContentDescription("导入书籍");
-        titleRow.addView(importBtn);
-        body.addView(titleRow);Ui.gap(body,20);
-        TextView browseHeader=Ui.text(this,"浏览与筛选",12,Ui.MUTED);
-        browseHeader.setContentDescription("浏览与筛选分组");body.addView(browseHeader);Ui.gap(body,8);
+        titleRow.addView(Ui.tokenText(this,"书库",UiTokens.Typography.PAGE_TITLE,UiTokens.Role.PRIMARY),Ui.weight());
+        importButton=Ui.primaryToken(this,"＋ 导入",()->new AlertDialog.Builder(this).setTitle("导入书籍").setItems(new String[]{"添加文件（含标签与书评书包）","扫描文件夹"},(d,which)->{if(which==0)pickFiles();else startActivity(new Intent(this,FolderImportActivity.class));}).show(),"导入书籍");
+        titleRow.addView(importButton);
+        body.addView(titleRow);Ui.gap(body,UiTokens.spacingDp(UiTokens.Spacing.LG));
+        // 常驻搜索：surface 底 + 15dp 圆角（UiTokens 取值）。
         LinearLayout searchRow=Ui.row(this);
-        EditText search=new EditText(this);searchInput=search;search.setSingleLine(true);search.setTextSize(14);search.setTextColor(Ui.INK);search.setHintTextColor(Ui.MUTED);search.setHint("搜索书名、标签…");search.setContentDescription("搜索书名、标签");search.setText(query);search.setBackground(Ui.outline(this,Color.WHITE,10));search.setPadding(Ui.dp(this,16),0,Ui.dp(this,12),0);
+        EditText search=new EditText(this);searchInput=search;search.setSingleLine(true);search.setTextSize(14);search.setTextColor(UiTokens.color(UiTokens.Role.PRIMARY));search.setHintTextColor(Ui.MUTED);search.setHint("搜索书名、标签…");search.setContentDescription("搜索书名、标签");search.setText(query);search.setBackground(Ui.outline(this,UiTokens.color(UiTokens.Role.SURFACE),UiTokens.radiusDp(UiTokens.Radius.INPUT)));search.setPadding(Ui.dp(this,16),0,Ui.dp(this,12),0);
         search.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
         LinearLayout.LayoutParams searchParams=new LinearLayout.LayoutParams(0,Ui.dp(this,46),1);searchParams.rightMargin=Ui.dp(this,8);searchRow.addView(search,searchParams);
-        Button clearSearch = Ui.button(this, "清除", () -> search.setText(""), "清除搜索词");
+        Button clearSearch=Ui.secondaryToken(this,"清除",() -> search.setText(""),"清除搜索词");
         clearSearch.setVisibility(query.isEmpty() ? View.GONE : View.VISIBLE);
         searchRow.addView(clearSearch);
-        body.addView(searchRow);Ui.gap(body,12);
-        Button wall=Ui.button(this,hideBookTitles?"▦ 显示书名":"▤ 封面墙",()->{
+        body.addView(searchRow);Ui.gap(body,UiTokens.spacingDp(UiTokens.Spacing.LG));
+        // 续读主卡插槽：worker 异步填充，有可靠记录才显示、最多 1 个。
+        resumeSlot=Ui.column(this);body.addView(resumeSlot);
+        // 浏览范围 / 浏览方式 segment：soft 底 + 3dp 内距，选中项 surface 底 + accent 文字。
+        LinearLayout segment=Ui.row(this);
+        segment.setBackground(Ui.shape(UiTokens.color(UiTokens.Role.SOFT),UiTokens.radiusDp(UiTokens.Radius.SEGMENT_CONTAINER),this));
+        Ui.pad(segment,3);
+        segment.addView(segmentItem("全部书籍",this::allBooks,"显示全部书籍",ALL_BOOKS.equals(folderId)&&!favoritesOnly));
+        segment.addView(segmentItem("文件夹",this::rootFolder,"浏览来源文件夹",!ALL_BOOKS.equals(folderId)&&!favoritesOnly));
+        segment.addView(segmentItem("★ 珍藏",()->{if(favoritesOnly)allBooks();else showFavorites();},"按珍藏筛选",favoritesOnly));
+        if(gridMode) segment.addView(segmentItem(hideBookTitles?"▦ 显示书名":"▤ 封面墙",()->{
             hideBookTitles=!hideBookTitles;
             getSharedPreferences("shelf",0).edit().putBoolean("hideBookTitles",hideBookTitles).apply();
             show();
-        },"切换封面墙（隐藏书名）");
-        if(gridMode) body.addView(wall);
-        LinearLayout modes=Ui.row(this);
-        Button all=Ui.button(this,"全部书籍",this::allBooks,"显示全部书籍");Button folders=Ui.button(this,"文件夹",this::rootFolder,"浏览来源文件夹");
-        Button favorites=Ui.button(this,"★ 珍藏",()->{if(favoritesOnly)allBooks();else showFavorites();},"按珍藏筛选");
-        if(favoritesOnly){favorites.setBackground(Ui.shape(Ui.INK,8,this));favorites.setTextColor(Color.WHITE);}
-        else if(ALL_BOOKS.equals(folderId)){all.setBackground(Ui.shape(Ui.INK,8,this));all.setTextColor(Color.WHITE);}
-        else{folders.setBackground(Ui.shape(Ui.INK,8,this));folders.setTextColor(Color.WHITE);}
-        modes.addView(all);modes.addView(folders);modes.addView(favorites);View fill=new View(this);modes.addView(fill,new LinearLayout.LayoutParams(0,1,1));
-        modes.addView(Ui.button(this,organizing?"完成":"选择",()->{organizing=!organizing;if(!organizing)selectedBookIds.clear();show();},"切换批量选择模式"));body.addView(modes);
+        },"切换封面墙（隐藏书名）",hideBookTitles));
+        body.addView(segment);
+        LinearLayout selectionRow=Ui.row(this);
+        selectionRow.addView(Ui.secondaryToken(this,organizing?"完成":"选择",()->{organizing=!organizing;if(!organizing)selectedBookIds.clear();show();},"切换批量选择模式"));
+        body.addView(selectionRow);
         if(!ALL_BOOKS.equals(folderId))breadcrumb(body);
         HorizontalScrollView toolStrip = new HorizontalScrollView(this);
         toolStrip.setHorizontalScrollBarEnabled(false);
@@ -485,6 +514,21 @@ public final class MainActivity extends Activity {
             if (keyboard != null) keyboard.hideSoftInputFromWindow(search.getWindowToken(), 0);
             return true;
         });
+    }
+
+    /** segment 单项：选中=ACCENT 文字 + SURFACE 底 11dp 圆角；未选中=次操作描边。 */
+    private Button segmentItem(String label,Runnable click,String desc,boolean selected){
+        Button b=Ui.secondaryToken(this,label,click,desc);
+        b.setMinWidth(0);b.setMinimumWidth(0);
+        b.setPadding(Ui.dp(this,8),Ui.dp(this,4),Ui.dp(this,8),Ui.dp(this,4));
+        if(selected){
+            b.setBackground(Ui.shape(UiTokens.color(UiTokens.Role.SURFACE),
+                    UiTokens.radiusDp(UiTokens.Radius.SEGMENT_ITEM),this));
+            b.setTextColor(UiTokens.color(UiTokens.Role.ACCENT));
+            b.setTypeface(android.graphics.Typeface.create(
+                    UiTokens.fontFamily(UiTokens.Typography.AUX),android.graphics.Typeface.BOLD));
+        }
+        return b;
     }
 
     private void selectionTools(LinearLayout body){
@@ -715,8 +759,10 @@ public final class MainActivity extends Activity {
                         }
                     }
                 }
+                // G2 三闸门：① opened_ 降序/id 升序取 latest（上面已选）；② 进度键严格有效；
+                // ③ 文件可读（BookStore.open() 口径，含 SAF 授权与 SHA）。只校验 latest 一本。
                 final BookStore.Book resumeBook = latest;
-                final String resumePosition = resumeBook == null ? "" : savedPosition(reading, resumeBook);
+                final ResolvedContinueReading resolved = resolveContinue(reading, resumeBook, mayContinue);
                 Collections.sort(books,(a,b)->{
                     int result=sorting==1?collator.compare(a.title,b.title):sorting==2
                             ?Long.compare(opened.get(b.id),opened.get(a.id)):Long.compare(b.added,a.added);
@@ -726,7 +772,15 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (isDestroyed() || request != libraryRequest) return;
                     cardMetadata=metadata;
-                    populateShelf(list, folders, books, searching, tagsOnly, filter, tags, resumeBook, resumePosition);
+                    // 续读主卡出现在搜索之后、浏览范围之前；有可靠记录才显示，最多 1 个。
+                    LinearLayout slot=resumeSlot;
+                    if(slot!=null){
+                        slot.removeAllViews();
+                        if(resolved!=null&&!organizing&&bookPage==0) renderContinueCard(slot,resolved,resumeBook);
+                    }
+                    // 主操作按状态迁移：有续读→继续阅读为唯一 primary，导入降 secondary；空库→导入升 primary。
+                    applyImportButtonStyle(resolved==null);
+                    populateShelf(list, folders, books, searching, tagsOnly, filter, tags);
                     if (BuildConfig.DEBUG && request == libraryRequest) {
                         Log.d("PERF_SHELF", "request=" + request
                                 + " ms=" + (SystemClock.elapsedRealtime() - perfStart)
@@ -759,7 +813,7 @@ public final class MainActivity extends Activity {
 
     private void populateShelf(LinearLayout list, List<BookStore.Folder> folders,
                                List<BookStore.Book> books, boolean searching, boolean tagsOnly, String filter,
-                               Map<String, List<String>> tags, BookStore.Book resumeBook, String resumePosition) {
+                               Map<String, List<String>> tags) {
         list.removeAllViews();
         visibleBooks.clear();visibleChecks.clear();
         coverDecodesThisPage=0; // 每页重置；4 次硬上限只统计真正调用 preview 的卡片
@@ -777,7 +831,6 @@ public final class MainActivity extends Activity {
         int totalItems = folders.size() + books.size();
         int pages = Math.max(1, (totalItems + ITEMS_PER_PAGE - 1) / ITEMS_PER_PAGE);
         bookPage = Math.max(0, Math.min(bookPage, pages - 1));
-        if (resumeBook != null && !organizing && bookPage == 0) addContinueCard(list, resumeBook, resumePosition);
         int start = bookPage * ITEMS_PER_PAGE;
         int end = Math.min(start + ITEMS_PER_PAGE, totalItems);
         LinearLayout gridRow=null;int gridColumn=0;
@@ -815,27 +868,102 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void addContinueCard(LinearLayout list, BookStore.Book book, String position) {
-        LinearLayout card = Ui.row(this);
-        card.setBackground(Ui.outline(this, Color.WHITE, 14));
-        Ui.pad(card, 14);
+    /**
+     * G2 三闸门的 ②③：① opened_ 已由 renderShelf 的 latest 选出并只在 mayContinue 视图生效；
+     * 这里校验进度键严格有效与文件可读（BookStore.open() 完整口径，含 SAF 授权与 SHA）。
+     * 任一失败返回 null → 不显示卡，绝不显示“点开报错”的卡。只在 worker 线程对 latest 一本调用。
+     */
+    private ResolvedContinueReading resolveContinue(SharedPreferences reading, BookStore.Book book,
+                                                    boolean mayContinue) {
+        if (!mayContinue || book == null) return null;
+        try {
+            if (store.find(book.id) == null) return null;
+            ResolvedContinueReading.Format format;
+            switch (book.format) {
+                case "epub": format = ResolvedContinueReading.Format.EPUB; break;
+                case "pdf": format = ResolvedContinueReading.Format.PDF; break;
+                case "comic": format = ResolvedContinueReading.Format.COMIC; break;
+                default: format = ResolvedContinueReading.Format.TEXT; break;
+            }
+            int progress = reading.getInt("progress_" + book.id, -1);
+            String anchor = reading.getString("anchor_" + book.id, null);
+            int spine = reading.getInt("epub_chapter_" + book.id, -1);
+            String cfi = reading.getString("epubCfi_" + book.id, "");
+            int page = reading.getInt("pdf_page_" + book.id, -1);
+            int count = reading.getInt("pdf_count_" + book.id, 0);
+            int comicPage = comicPageFor(book);
+            if (!ResolvedContinueReading.isReliable(format, progress, anchor, spine, cfi, page, count, comicPage))
+                return null;
+            // 位置文案复用 savedPosition() 的取值口径；漫画与 CFI-only 由其纯 JVM 兜底。
+            String text = savedPosition(reading, book);
+            if (text.isEmpty())
+                text = ResolvedContinueReading.positionText(format, progress, spine, cfi, page, count, comicPage);
+            if (text.isEmpty()) return null;
+            // ③ 文件可读：本地 isFile/canRead；SAF 持久授权 + 内容 SHA 与 books.sha256 一致。
+            try (BookAccess ignored = store.open(book)) {
+                // opened() 成功即通过；位置恢复由阅读页负责，这里不手动 seek。
+            }
+            return new ResolvedContinueReading(book.id, book.title, format, text);
+        } catch (Exception unreadable) {
+            return null;
+        }
+    }
+
+    /** 漫画进度在独立 comicProgress SP 按内容指纹存；书架无 id→指纹索引，按 name_ 轻量匹配，
+     *  匹配不到返回 -1（宁可不显示）。不解压归档，开销可控。 */
+    private int comicPageFor(BookStore.Book book) {
+        try {
+            android.content.SharedPreferences comic = getSharedPreferences(ComicProgressStore.SP, 0);
+            String keys = comic.getString(ComicProgressStore.KEY_KEYS, "");
+            if (keys == null || keys.isEmpty()) return -1;
+            for (String key : keys.split(",")) {
+                if (key.isEmpty()) continue;
+                String name = comic.getString(ComicProgressStore.KEY_NAME + key, "");
+                if (book.title.equals(name)) return comic.getInt(ComicProgressStore.KEY_PAGE + key, -1);
+            }
+        } catch (Exception ignored) { /* 读不到独立 SP 视为无可靠进度 */ }
+        return -1;
+    }
+
+    /** 导入按钮主次迁移：有续读→次操作描边，空库→唯一实心 PRIMARY。 */
+    private void applyImportButtonStyle(boolean primary) {
+        if (importButton == null) return;
+        int bg = UiTokens.color(primary ? UiTokens.Role.ACCENT : UiTokens.Role.SURFACE);
+        int fg = UiTokens.color(primary ? UiTokens.Role.ON_ACCENT : UiTokens.Role.PRIMARY);
+        importButton.setTextColor(fg);
+        android.graphics.drawable.GradientDrawable shape =
+                Ui.shape(bg, UiTokens.radiusDp(UiTokens.Radius.BUTTON), this);
+        if (!primary) shape.setStroke(Ui.dp(this, 1), UiTokens.color(UiTokens.Role.DIVIDER));
+        importButton.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(UiTokens.color(UiTokens.Role.PRIMARY) & 0x18FFFFFF),
+                shape, null));
+    }
+
+    /** v3 续读主卡：ACCENT_SOFT 底 + 20dp 圆角 + 小封面 + 元信息 + 唯一青绿主按钮。
+     *  按钮仍走 open(book)，不改阅读页的位置恢复逻辑。 */
+    private void renderContinueCard(LinearLayout slot, ResolvedContinueReading r, BookStore.Book book) {
+        LinearLayout card = Ui.tokenCard(this, UiTokens.Role.ACCENT_SOFT, UiTokens.Radius.CONTINUE_CARD);
+        int pad = UiTokens.spacingDp(UiTokens.Spacing.LG);
+        card.setPadding(pad, pad, pad, pad);
+        TextView cover = Ui.text(this, book.title.substring(0, Math.min(4, book.title.length())), 14, Color.WHITE);
+        cover.setGravity(Gravity.CENTER);
+        cover.setBackground(Ui.coverShape(this, covers[Math.floorMod(book.id.hashCode(), covers.length)]));
+        card.addView(cover, new LinearLayout.LayoutParams(Ui.dp(this, 56), Ui.dp(this, 84)));
         LinearLayout info = Ui.column(this);
-        info.addView(Ui.text(this, "上次阅读", 12, Ui.MUTED));
-        Ui.gap(info, 4);
-        TextView title = Ui.title(this, book.title, 17);
+        info.setPadding(Ui.dp(this, 12), 0, Ui.dp(this, 8), 0);
+        info.addView(Ui.tokenText(this, "继续阅读", UiTokens.Typography.AUX, UiTokens.Role.PRIMARY));
+        TextView title = Ui.tokenText(this, book.title, UiTokens.Typography.GROUP_TITLE, UiTokens.Role.PRIMARY);
         title.setMaxLines(2);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         info.addView(title);
-        String format = book.format.toUpperCase(Locale.ROOT);
-        info.addView(Ui.text(this, position.isEmpty() ? format : format + " · " + position, 12, Ui.MUTED));
-        LinearLayout.LayoutParams infoParams = Ui.weight();
-        infoParams.rightMargin = Ui.dp(this, 10);
-        card.addView(info, infoParams);
-        Button resume = Ui.primary(this, "继续阅读", () -> open(book));
-        resume.setContentDescription("继续阅读 " + book.title);
-        card.addView(resume);
-        list.addView(card);
-        Ui.gap(list, 12);
+        info.addView(Ui.tokenText(this, r.format.name() + " · " + r.positionText,
+                UiTokens.Typography.AUX, UiTokens.Role.PRIMARY));
+        card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+        Button resume = Ui.primaryToken(this, "继续阅读", () -> open(book), "继续阅读 " + book.title);
+        card.addView(resume, new LinearLayout.LayoutParams(-2, -2));
+        card.setContentDescription("继续阅读 " + book.title + "，" + r.positionText);
+        slot.addView(card, new LinearLayout.LayoutParams(-1, -2));
+        Ui.gap(slot, UiTokens.spacingDp(UiTokens.Spacing.LG));
     }
 
     private static String savedPosition(SharedPreferences reading, BookStore.Book book) {
@@ -878,25 +1006,46 @@ public final class MainActivity extends Activity {
             title = folderId == null ? "还没有来源文件夹" : "此文件夹为空";
             message = folderId == null ? "可通过导入菜单扫描文件夹。" : "当前层没有直接归档的书籍或子文件夹。";
         }
-        LinearLayout panel = Ui.column(this);
-        panel.setBackground(Ui.outline(this, Color.WHITE, 14));
-        Ui.pad(panel, 16);
-        panel.addView(Ui.title(this, title, 17));
-        Ui.gap(panel, 4);
-        panel.addView(Ui.text(this, message, 14, Ui.MUTED));
-        Ui.gap(panel, 12);
-        if (emptyLibrary) {
-            panel.addView(Ui.primary(this, "导入本地书籍", this::pickFiles));
+        String cta, desc;
+        Runnable action;
+        if (searching) {
+            cta = tagsOnly ? "输入标签" : "换个关键词";
+            desc = "聚焦搜索框以修改搜索词";
+            action = this::focusSearchInput;
+        } else if (emptyLibrary) {
+            cta = "导入本地书籍"; desc = "导入本地书籍"; action = this::pickFiles;
         } else {
-            if (hasFilter) panel.addView(Ui.button(this, "清除筛选", this::clearFiltersKeepKeyword,
-                    tagsOnly ? "清除标签、珍藏与文件夹筛选" : "清除筛选条件，保留关键词"));
-            if (searching) {
-                if (hasFilter) Ui.gap(panel, 8);
-                panel.addView(Ui.button(this, tagsOnly ? "输入标签" : "换个关键词", this::focusSearchInput,
-                        "聚焦搜索框以修改搜索词"));
-            }
+            // 筛选无结果（珍藏/文件夹/标签）：清除筛选但保留纯文字关键词（0.49 语义不变）。
+            cta = "清除筛选"; desc = "清除筛选条件，保留关键词"; action = this::clearFiltersKeepKeyword;
         }
-        list.addView(panel);
+        // SURFACE 卡 + 58dp ACCENT_SOFT 图标底；次级文字只放 SURFACE（4.88:1），不碰 SOFT。
+        LinearLayout panel = Ui.tokenCard(this, UiTokens.Role.SURFACE, UiTokens.Radius.CARD);
+        int pad = UiTokens.spacingDp(UiTokens.Spacing.LG);
+        panel.setPadding(pad, pad, pad, pad);
+        TextView icon = Ui.text(this, "▤", 25, UiTokens.color(UiTokens.Role.ACCENT));
+        icon.setGravity(Gravity.CENTER);
+        icon.setBackground(Ui.shape(UiTokens.color(UiTokens.Role.ACCENT_SOFT),
+                UiTokens.radiusDp(UiTokens.Radius.PILL), this));
+        panel.addView(icon, new LinearLayout.LayoutParams(Ui.dp(this, 58), Ui.dp(this, 58)));
+        Ui.gap(panel, UiTokens.spacingDp(UiTokens.Spacing.MD));
+        panel.addView(Ui.tokenText(this, title, UiTokens.Typography.GROUP_TITLE, UiTokens.Role.PRIMARY));
+        Ui.gap(panel, UiTokens.spacingDp(UiTokens.Spacing.XS));
+        panel.addView(Ui.tokenText(this, message, UiTokens.Typography.BODY, UiTokens.Role.SECONDARY));
+        Ui.gap(panel, UiTokens.spacingDp(UiTokens.Spacing.MD));
+        // 每屏至多一个 PRIMARY：空库时标题栏导入已是 primary，此处 CTA 降次；
+        // 搜索/筛选无结果时标题栏导入降次，此处 CTA 升 primary。
+        if (emptyLibrary) {
+            panel.addView(Ui.secondaryToken(this, cta, action, desc));
+        } else {
+            applyImportButtonStyle(false);
+            panel.addView(Ui.primaryToken(this, cta, action, desc));
+        }
+        if (searching && hasFilter) {
+            Ui.gap(panel, UiTokens.spacingDp(UiTokens.Spacing.SM));
+            panel.addView(Ui.secondaryToken(this, "清除筛选", this::clearFiltersKeepKeyword,
+                    "清除筛选条件，保留关键词"));
+        }
+        list.addView(panel, new LinearLayout.LayoutParams(-1, -2));
     }
 
     /** 空态 CTA「清除筛选」：清掉珍藏/文件夹/标签查询(#tag)筛选，但保留纯文字关键词与搜索框输入。 */

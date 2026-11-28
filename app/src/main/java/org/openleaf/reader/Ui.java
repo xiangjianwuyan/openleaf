@@ -1,5 +1,7 @@
 package org.openleaf.reader;
 
+import org.openleaf.reader.core.UiTokens;
+
 import android.app.Activity;
 import android.content.Context;
 import android.content.res.ColorStateList;
@@ -37,4 +39,62 @@ final class Ui {
     static void mount(Activity a,LinearLayout root){root.setBackgroundColor(BG);root.setFitsSystemWindows(true);a.setContentView(root);SystemBars.apply(a,BG);root.setOnApplyWindowInsetsListener((v,insets)->{v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom());return insets;});root.requestApplyInsets();}
     static LinearLayout.LayoutParams weight(){return new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1);}
     static void gap(LinearLayout l,int dp){View v=new View(l.getContext());l.addView(v,new LinearLayout.LayoutParams(1,Ui.dp(l.getContext(),dp)));}
+
+    // ---- v3 令牌重载：以下全部为追加；上面的常量与原 button/primary/mount/weight 签名一行未改 ----
+
+    /** v3 主操作：ACCENT 实心 + ON_ACCENT 文字，命中区仍 ≥48dp（A11Y 锚点不变）。 */
+    static Button primaryToken(Context c,String label,Runnable onClick,String desc){
+        return tokenButton(c,label,onClick,desc,UiTokens.color(UiTokens.Role.ACCENT),
+                UiTokens.color(UiTokens.Role.ON_ACCENT),UiTokens.radiusDp(UiTokens.Radius.BUTTON));
+    }
+
+    /** v3 次操作：SURFACE 底 + 1dp DIVIDER 描边 + PRIMARY 文字；描边仅辅助，不靠颜色 alone。 */
+    static Button secondaryToken(Context c,String label,Runnable onClick,String desc){
+        Button b=tokenButton(c,label,onClick,desc,UiTokens.color(UiTokens.Role.SURFACE),
+                UiTokens.color(UiTokens.Role.PRIMARY),UiTokens.radiusDp(UiTokens.Radius.BUTTON));
+        GradientDrawable bg=shape(UiTokens.color(UiTokens.Role.SURFACE),UiTokens.radiusDp(UiTokens.Radius.BUTTON),c);
+        bg.setStroke(dp(c,1),UiTokens.color(UiTokens.Role.DIVIDER));
+        b.setBackground(new RippleDrawable(ColorStateList.valueOf(
+                UiTokens.color(UiTokens.Role.PRIMARY) & 0x18FFFFFF),bg,null));
+        return b;
+    }
+
+    /** 令牌按钮公共构造：色/圆角全部来自 UiTokens，字号 14sp、命中区 48dp。 */
+    static Button tokenButton(Context c,String label,Runnable onClick,String desc,int bg,int fg,int radiusDp){
+        Button b=new Button(c);b.setText(label);b.setTextSize(UiTokens.textSizeSp(UiTokens.Typography.AUX));
+        b.setTextColor(fg);b.setAllCaps(false);
+        b.setTypeface(Typeface.create(UiTokens.fontFamily(UiTokens.Typography.BODY),Typeface.NORMAL));
+        b.setMinHeight(dp(c,48));b.setMinimumHeight(dp(c,48));b.setMinWidth(dp(c,48));b.setMinimumWidth(dp(c,48));
+        b.setPadding(dp(c,12),dp(c,6),dp(c,12),dp(c,6));b.setStateListAnimator(null);b.setElevation(0);
+        b.setBackground(new RippleDrawable(ColorStateList.valueOf(
+                UiTokens.color(UiTokens.Role.PRIMARY) & 0x18FFFFFF),shape(bg,radiusDp,c),null));
+        b.setOnClickListener(v->onClick.run());if(desc!=null)b.setContentDescription(desc);return b;
+    }
+
+    /** 令牌文字：字级/字体/颜色全部来自 UiTokens。 */
+    static TextView tokenText(Context c,String text,UiTokens.Typography t,UiTokens.Role role){
+        TextView v=new TextView(c);v.setText(text);v.setTextSize(UiTokens.textSizeSp(t));
+        v.setTextColor(UiTokens.color(role));v.setTypeface(Typeface.create(UiTokens.fontFamily(t),Typeface.NORMAL));
+        v.setFontFeatureSettings("kern");return v;
+    }
+
+    /** 令牌卡片容器：底色/圆角来自 UiTokens。 */
+    static LinearLayout tokenCard(Context c,UiTokens.Role bg,UiTokens.Radius radius){
+        LinearLayout l=column(c);l.setBackground(shape(UiTokens.color(bg),UiTokens.radiusDp(radius),c));return l;
+    }
+
+    /** 封面占位：左侧 6dp、右侧 12dp 圆角，取自 UiTokens.Radius。 */
+    static GradientDrawable coverShape(Context c,int color){
+        GradientDrawable d=new GradientDrawable();d.setColor(color);
+        float left=dp(c,UiTokens.radiusDp(UiTokens.Radius.COVER_LEFT));
+        float right=dp(c,UiTokens.radiusDp(UiTokens.Radius.COVER_RIGHT));
+        d.setCornerRadii(new float[]{left,left,right,right,right,right,left,left});return d;
+    }
+
+    /** 令牌根容器挂载：底色来自调用方（UiTokens 取值），SystemBars 同步。 */
+    static void mount(Activity a,LinearLayout root,int bgColor){
+        root.setBackgroundColor(bgColor);root.setFitsSystemWindows(true);a.setContentView(root);SystemBars.apply(a,bgColor);
+        root.setOnApplyWindowInsetsListener((v,insets)->{v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom());return insets;});
+        root.requestApplyInsets();
+    }
 }
