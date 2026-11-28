@@ -22,6 +22,7 @@ import android.widget.Toast;
 import org.openleaf.reader.core.ComicFlow;
 import org.openleaf.reader.core.ComicSlots;
 import org.openleaf.reader.core.ComicSlots.CoverMode;
+import org.openleaf.reader.core.UiTokens;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -129,8 +130,10 @@ public final class ComicActivity extends Activity {
         super.onCreate(state);
         progressStore = new ComicProgressStore(this);
         LinearLayout root = Ui.column(this);
-        Ui.mount(this, root);
+        // v4 I2b：chrome 走方向令牌；漫画图像区与调光遮罩像素不动。
+        Ui.mount(this, root, Ui.color(this, UiTokens.Role.BACKGROUND));
         TextView heading = Ui.title(this, "漫画", 20);
+        heading.setTextColor(Ui.color(this, UiTokens.Role.PRIMARY));
         if (android.os.Build.VERSION.SDK_INT >= 28) heading.setAccessibilityHeading(true);
         root.addView(heading);
 
@@ -160,14 +163,14 @@ public final class ComicActivity extends Activity {
         dimOverlay.setBackgroundColor(0x00000000);
         stage.addView(dimOverlay, new android.widget.FrameLayout.LayoutParams(-1, -1));
         root.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1f));
-        comicStatus = Ui.text(this, "", 12, Ui.MUTED);
+        comicStatus = Ui.text(this, "", 12, Ui.color(this, UiTokens.Role.SECONDARY));
         comicStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         root.addView(comicStatus);
 
         LinearLayout nav = Ui.row(this);
-        prevPageButton = Ui.button(this, "上一页", this::previous);
-        pageLabel = Ui.button(this, "未载入", this::showPageJumpDialog);
-        nextPageButton = Ui.button(this, "下一页", this::next);
+        prevPageButton = Ui.secondaryToken(this, "上一页", this::previous, "上一页");
+        pageLabel = Ui.secondaryToken(this, "未载入", this::showPageJumpDialog, "页码跳转");
+        nextPageButton = Ui.secondaryToken(this, "下一页", this::next, "下一页");
         nav.addView(prevPageButton);
         nav.addView(pageLabel, Ui.weight());
         nav.addView(nextPageButton);
@@ -230,18 +233,18 @@ public final class ComicActivity extends Activity {
 
     private void addReaderTools(LinearLayout root) {
         LinearLayout tools = Ui.row(this);
-        tools.addView(Ui.button(this, "打开", this::pickComic, "打开漫画文件"));
-        layoutButton = Ui.button(this, "", this::showReadingMethodDialog);
+        tools.addView(Ui.secondaryToken(this, "打开", this::pickComic, "打开漫画文件"));
+        layoutButton = Ui.secondaryToken(this, "", this::showReadingMethodDialog, "阅读方式");
         updateReadingMethodLabel();
         tools.addView(layoutButton, Ui.weight());
-        autoButton = Ui.button(this, "自动阅读", this::toggleAuto);
+        autoButton = Ui.secondaryToken(this, "自动阅读", this::toggleAuto, "自动阅读");
         tools.addView(autoButton);
         root.addView(tools);
         LinearLayout tools2 = Ui.row(this);
-        tools2.addView(Ui.button(this, "夜间调光", this::cycleDim, "夜间调光档位"), Ui.weight());
-        tools2.addView(Ui.button(this, "清除漫画阅读记录", this::clearComicProgress,
+        tools2.addView(Ui.secondaryToken(this, "夜间调光", this::cycleDim, "夜间调光档位"), Ui.weight());
+        tools2.addView(Ui.secondaryToken(this, "清除漫画阅读记录", this::clearComicProgress,
                 "清除本机全部漫画阅读进度"), new LinearLayout.LayoutParams(0, -2, 2f));
-        tools2.addView(Ui.button(this, "返回", this::finish, "返回书架"), Ui.weight());
+        tools2.addView(Ui.secondaryToken(this, "返回", this::finish, "返回书架"), Ui.weight());
         root.addView(tools2);
     }
 
@@ -250,14 +253,14 @@ public final class ComicActivity extends Activity {
         stopAuto();
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 16);
-        panel.addView(Ui.text(this, "阅读方向", 14, Ui.MUTED));
+        panel.addView(Ui.text(this, "阅读方向", 14, Ui.color(this, UiTokens.Role.SECONDARY)));
         RadioGroup directions = new RadioGroup(this);
         int ltrOption = addReadingChoice(directions, "从左到右");
         int rtlOption = addReadingChoice(directions, "从右到左");
         directions.check(rtl ? rtlOption : ltrOption);
         panel.addView(directions);
         Ui.gap(panel, 12);
-        panel.addView(Ui.text(this, "页面布局", 14, Ui.MUTED));
+        panel.addView(Ui.text(this, "页面布局", 14, Ui.color(this, UiTokens.Role.SECONDARY)));
         RadioGroup layouts = new RadioGroup(this);
         int singleOption = addReadingChoice(layouts, "单页");
         int doubleOption = addReadingChoice(layouts, "双页");
@@ -267,8 +270,8 @@ public final class ComicActivity extends Activity {
         panel.addView(layouts);
         if (subChapters.size() > 1 && subChapterIndex >= 0) {
             Ui.gap(panel, 12);
-            panel.addView(Ui.button(this, "章节 · " + (subChapterIndex + 1) + " / " + subChapters.size(),
-                    () -> { if (methodDialog != null) methodDialog.dismiss(); showSubChapterDialog(); }));
+            panel.addView(Ui.secondaryToken(this, "章节 · " + (subChapterIndex + 1) + " / " + subChapters.size(),
+                    () -> { if (methodDialog != null) methodDialog.dismiss(); showSubChapterDialog(); }, "选择章节"));
         }
         ScrollView scroll = new ScrollView(this);
         scroll.addView(panel);
@@ -316,6 +319,7 @@ public final class ComicActivity extends Activity {
         RadioButton choice = new RadioButton(this);
         choice.setId(View.generateViewId());
         choice.setText(label);
+        choice.setTextColor(Ui.color(this, UiTokens.Role.PRIMARY));
         choice.setMinHeight(Ui.dp(this, 48));
         group.addView(choice);
         return choice.getId();

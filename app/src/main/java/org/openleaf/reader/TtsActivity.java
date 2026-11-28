@@ -14,6 +14,7 @@ import android.widget.Toast;
 
 import org.openleaf.reader.core.MediaSessionIdentity;
 import org.openleaf.reader.core.TextIndexSpec;
+import org.openleaf.reader.core.UiTokens;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -68,35 +69,38 @@ public final class TtsActivity extends Activity implements TtsPlaybackService.Li
 
     private void buildUi() {
         LinearLayout root = Ui.column(this);
-        Ui.mount(this, root);
-        root.addView(Ui.title(this, "听书", 22));
-        titleView = Ui.text(this, "", 15, Ui.INK);
+        // v4 I2b：整页 chrome 走方向令牌；朗读内容仍由 TtsPlaybackService 提供，与正文纸色正交。
+        Ui.mount(this, root, Ui.color(this, UiTokens.Role.BACKGROUND));
+        TextView heading = Ui.title(this, "听书", 22);
+        heading.setTextColor(Ui.color(this, UiTokens.Role.PRIMARY));
+        root.addView(heading);
+        titleView = Ui.text(this, "", 15, Ui.color(this, UiTokens.Role.PRIMARY));
         root.addView(titleView);
-        chapterView = Ui.text(this, "未选择书籍", 13, Ui.MUTED);
+        chapterView = Ui.text(this, "未选择书籍", 13, Ui.color(this, UiTokens.Role.SECONDARY));
         root.addView(chapterView);
         Ui.gap(root, 8);
-        sentenceView = Ui.text(this, "点击「朗读」开始", 17, Ui.INK);
+        sentenceView = Ui.text(this, "点击「朗读」开始", 17, Ui.color(this, UiTokens.Role.PRIMARY));
         sentenceView.setMinLines(3);
         root.addView(sentenceView);
         Ui.gap(root, 12);
 
         LinearLayout sentenceRow = Ui.row(this);
-        sentenceRow.addView(Ui.button(this, "⏮ 上一句",
-                () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_PREV_SENTENCE)));
-        playButton = Ui.button(this, "▶ 朗读",
-                () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_TOGGLE));
+        sentenceRow.addView(Ui.secondaryToken(this, "⏮ 上一句",
+                () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_PREV_SENTENCE), "上一句"));
+        playButton = Ui.primaryToken(this, "▶ 朗读",
+                () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_TOGGLE), "朗读或暂停");
         sentenceRow.addView(playButton);
-        sentenceRow.addView(Ui.button(this, "⏭ 下一句",
-                () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_NEXT_SENTENCE)));
+        sentenceRow.addView(Ui.secondaryToken(this, "⏭ 下一句",
+                () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_NEXT_SENTENCE), "下一句"));
         root.addView(sentenceRow);
 
         LinearLayout chapterRow = Ui.row(this);
-        chapterRow.addView(Ui.button(this, "上一章",
-                () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_PREV_CHAPTER)));
-        chapterRow.addView(Ui.button(this, "下一章",
-                () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_NEXT_CHAPTER)));
-        chapterRow.addView(Ui.button(this, MediaSessionIdentity.TTS.stopLabel(),
-                () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_STOP)));
+        chapterRow.addView(Ui.secondaryToken(this, "上一章",
+                () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_PREV_CHAPTER), "上一章"));
+        chapterRow.addView(Ui.secondaryToken(this, "下一章",
+                () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_NEXT_CHAPTER), "下一章"));
+        chapterRow.addView(Ui.secondaryToken(this, MediaSessionIdentity.TTS.stopLabel(),
+                () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_STOP), "停止听书朗读"));
         root.addView(chapterRow);
 
         speedBar = new SeekBar(this);
@@ -110,22 +114,22 @@ public final class TtsActivity extends Activity implements TtsPlaybackService.Li
             @Override public void onStopTrackingTouch(SeekBar bar) { }
         });
         root.addView(speedBar, new LinearLayout.LayoutParams(-1, -2));
-        root.addView(Ui.text(this, "语速 0.75× — 2×", 12, Ui.MUTED));
+        root.addView(Ui.text(this, "语速 0.75× — 2×", 12, Ui.color(this, UiTokens.Role.SECONDARY)));
 
         root.addView(Ui.text(this, "定时对象：" + MediaSessionIdentity.TTS.objectLabel()
-                + "（与本地音频是不同会话，互不影响）。", 12, Ui.MUTED));
+                + "（与本地音频是不同会话，互不影响）。", 12, Ui.color(this, UiTokens.Role.SECONDARY)));
         LinearLayout sleepRow = Ui.row(this);
-        sleepRow.addView(Ui.button(this, "睡眠 15 分", () -> TtsPlaybackService.setSleep(this, 15)));
-        sleepRow.addView(Ui.button(this, "睡眠 30 分", () -> TtsPlaybackService.setSleep(this, 30)));
-        sleepRow.addView(Ui.button(this, "本章结束", () -> TtsPlaybackService.setSleepChapterEnd(this)));
+        sleepRow.addView(Ui.secondaryToken(this, "睡眠 15 分", () -> TtsPlaybackService.setSleep(this, 15), "听书睡眠 15 分钟"));
+        sleepRow.addView(Ui.secondaryToken(this, "睡眠 30 分", () -> TtsPlaybackService.setSleep(this, 30), "听书睡眠 30 分钟"));
+        sleepRow.addView(Ui.secondaryToken(this, "本章结束", () -> TtsPlaybackService.setSleepChapterEnd(this), "听书本章结束后停止"));
         root.addView(sleepRow);
-        sleepView = Ui.text(this, "睡眠：关", 12, Ui.MUTED);
+        sleepView = Ui.text(this, "睡眠：关", 12, Ui.color(this, UiTokens.Role.SECONDARY));
         root.addView(sleepView);
         Ui.gap(root, 12);
-        root.addView(Ui.text(this, "退出本页朗读不会中断；锁屏后仍会继续，可在通知栏控制。", 12, Ui.MUTED));
+        root.addView(Ui.text(this, "退出本页朗读不会中断；锁屏后仍会继续，可在通知栏控制。", 12, Ui.color(this, UiTokens.Role.SECONDARY)));
         Ui.gap(root, 8);
-        root.addView(Ui.button(this, "选择 TXT 文件", this::pickBook));
-        root.addView(Ui.button(this, "返回", this::finish));
+        root.addView(Ui.secondaryToken(this, "选择 TXT 文件", this::pickBook, "选择 TXT 文件朗读"));
+        root.addView(Ui.secondaryToken(this, "返回", this::finish, "返回上一页"));
     }
 
     private void pickBook() {

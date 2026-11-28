@@ -16,6 +16,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import org.openleaf.reader.core.BookParser;
 import org.openleaf.reader.core.ThemePalette;
+import org.openleaf.reader.core.UiTokens;
 import java.io.ByteArrayInputStream;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -122,7 +123,8 @@ public final class EpubActivity extends Activity {
 
     private void build() {
         LinearLayout root = Ui.column(this);
-        Ui.mount(this, root);
+        // v4 I2b：chrome 走方向令牌；WebView 正文纸张仍由 ThemePalette 独立决定。
+        Ui.mount(this, root, Ui.color(this, UiTokens.Role.BACKGROUND));
         // One inset owner: Android 15 edge-to-edge and older navigation modes both reserve real space.
         root.setFitsSystemWindows(false);
         root.setOnApplyWindowInsetsListener((view, insets) -> {
@@ -138,19 +140,20 @@ public final class EpubActivity extends Activity {
         });
         root.requestApplyInsets();
         LinearLayout top = Ui.row(this);
-        Button back = Ui.button(this, "返回", this::finish); back.setContentDescription("返回书架"); top.addView(back);
+        top.addView(Ui.secondaryToken(this, "返回", this::finish, "返回书架"));
         TextView title = Ui.title(this, getIntent().getStringExtra("title"), 16);
+        title.setTextColor(Ui.color(this, UiTokens.Role.PRIMARY));
         title.setSingleLine(); title.setEllipsize(TextUtils.TruncateAt.END);
         top.addView(title, Ui.weight());
-        Button find = Ui.button(this, "查找", this::searchText); find.setContentDescription("书内查找"); top.addView(find);
-        Button settingsButton = Ui.button(this, "设置", this::settings); settingsButton.setContentDescription("阅读设置"); top.addView(settingsButton);
+        top.addView(Ui.secondaryToken(this, "查找", this::searchText, "书内查找"));
+        top.addView(Ui.secondaryToken(this, "设置", this::settings, "阅读设置"));
         root.addView(top);
-        label = Ui.text(this, "正在打开 EPUB…", 13, Ui.GREEN);
+        label = Ui.text(this, "正在打开 EPUB…", 13, Ui.color(this, UiTokens.Role.PRIMARY));
         label.setSingleLine(); label.setEllipsize(TextUtils.TruncateAt.END); Ui.pad(label, 8); root.addView(label);
         cssStatus = Ui.text(this, ExternalCssStore.lastStatus() == null
-                ? "未导入外部样式（当前使用原书样式 / 应用统一样式）" : ExternalCssStore.lastStatus(), 12, Ui.MUTED);
+                ? "未导入外部样式（当前使用原书样式 / 应用统一样式）" : ExternalCssStore.lastStatus(), 12, Ui.color(this, UiTokens.Role.SECONDARY));
         cssStatus.setMaxLines(2); Ui.pad(cssStatus, 8); cssStatus.setVisibility(android.view.View.GONE); root.addView(cssStatus);
-        themeStatus = Ui.text(this, "", 12, Ui.MUTED);
+        themeStatus = Ui.text(this, "", 12, Ui.color(this, UiTokens.Role.SECONDARY));
         themeStatus.setMaxLines(2); Ui.pad(themeStatus, 8); themeStatus.setVisibility(android.view.View.GONE); root.addView(themeStatus);
         web = new WebView(this);
         web.setSaveEnabled(false);
@@ -249,13 +252,11 @@ public final class EpubActivity extends Activity {
         });
         root.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
         footer = Ui.row(this);
-        previous = Ui.button(this, "上一页", () -> turnPage(-1));
-        next = Ui.button(this, "下一页", () -> turnPage(1));
-        toc = Ui.button(this, "目录", this::contents);
-        toc.setContentDescription("章节目录");
+        previous = Ui.secondaryToken(this, "上一页", () -> turnPage(-1), "上一页");
+        next = Ui.secondaryToken(this, "下一页", () -> turnPage(1), "下一页");
+        toc = Ui.secondaryToken(this, "目录", this::contents, "章节目录");
         footer.addView(previous, Ui.weight()); footer.addView(toc, Ui.weight()); footer.addView(next, Ui.weight());
-        Button plain = Ui.button(this, "纯文字", this::plain); plain.setContentDescription("切换纯文字模式");
-        footer.addView(plain, Ui.weight());
+        footer.addView(Ui.secondaryToken(this, "纯文字", this::plain, "切换纯文字模式"), Ui.weight());
         root.addView(footer);
         updateNavigation();
     }

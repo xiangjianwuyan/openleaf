@@ -26,6 +26,7 @@ import org.openleaf.reader.core.ReadingAnchor;
 import org.openleaf.reader.core.ReadingPace;
 import org.openleaf.reader.core.SourceOffset;
 import org.openleaf.reader.core.TextIndexSpec;
+import org.openleaf.reader.core.UiTokens;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -259,8 +260,9 @@ public final class ReaderActivity extends Activity {
         }
         final ReadingAnchor savedAnchor=anchor;
         root = Ui.column(this);
-        Ui.mount(this, root);
-        TextView loading = Ui.text(this, "正在整理书页…", 18, Ui.GREEN);
+        // v4 I2b：页面 chrome 底色走方向令牌；正文纸色由 ThemePalette 独立决定，二者正交。
+        Ui.mount(this, root, Ui.color(this, UiTokens.Role.BACKGROUND));
+        TextView loading = Ui.text(this, "正在整理书页…", 18, Ui.color(this, UiTokens.Role.PRIMARY));
         Ui.pad(loading, 28);
         root.addView(loading);
         worker.execute(() -> {
@@ -395,33 +397,33 @@ public final class ReaderActivity extends Activity {
         root.removeAllViews();
         toolbar = Ui.row(this);
         Ui.pad(toolbar, 4);
-        Button back = Ui.button(this, "返回", this::finish, "返回书架"); toolbar.addView(back);
-        TextView title = Ui.text(this, getIntent().getStringExtra("title"), 15, Ui.GREEN);
+        Button back = Ui.secondaryToken(this, "返回", this::finish, "返回书架"); toolbar.addView(back);
+        TextView title = Ui.text(this, getIntent().getStringExtra("title"), 15, Ui.color(this, UiTokens.Role.PRIMARY));
         title.setMaxLines(1);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         toolbar.addView(title, Ui.weight());
         // v4 I2：固定主栏严格为「目录/排版/听书/更多」四项，顺序不随格式能力或插件安装变化。
         // 编辑是格式相关的低频动作，收进「更多」；扩展动作也只进「更多」，不占主栏第五格。
-        Button tocMain = Ui.button(this, "目录", this::contents, "章节目录");
+        Button tocMain = Ui.secondaryToken(this, "目录", this::contents, "章节目录");
         tocMain.setId(R.id.readerToc);
         toolbar.addView(tocMain);
-        toolbar.addView(Ui.button(this, "排版", this::openStyleSettings, "排版设置"));
-        toolbar.addView(Ui.button(this, "听书", this::listenFromCurrentChapter, "从当前章节开始朗读"));
-        Button more = Ui.button(this, "更多", this::openMoreMenu, "更多阅读操作"); toolbar.addView(more);
+        toolbar.addView(Ui.secondaryToken(this, "排版", this::openStyleSettings, "排版设置"));
+        toolbar.addView(Ui.secondaryToken(this, "听书", this::listenFromCurrentChapter, "从当前章节开始朗读"));
+        Button more = Ui.secondaryToken(this, "更多", this::openMoreMenu, "更多阅读操作"); toolbar.addView(more);
         more.setOnClickListener(v -> { lastOptionsTrigger = v; openMoreMenu(); });
         root.addView(toolbar);
-        chapterLabel = Ui.text(this, "", 13, Ui.MUTED);
+        chapterLabel = Ui.text(this, "", 13, Ui.color(this, UiTokens.Role.SECONDARY));
         chapterLabel.setPadding(Ui.dp(this, 24), Ui.dp(this, 8), Ui.dp(this, 24), Ui.dp(this, 8));
         if (android.os.Build.VERSION.SDK_INT >= 28) chapterLabel.setAccessibilityHeading(true);
         root.addView(chapterLabel);
         searchControls=Ui.column(this);Ui.pad(searchControls,4);
-        searchStatus=Ui.text(this,"",12,Ui.MUTED);searchStatus.setMaxLines(2);searchControls.addView(searchStatus);
+        searchStatus=Ui.text(this,"",12,Ui.color(this, UiTokens.Role.SECONDARY));searchStatus.setMaxLines(2);searchControls.addView(searchStatus);
         LinearLayout matchActions=Ui.row(this);
-        previousMatch=Ui.button(this,"上一个",()->moveMatch(-1),"上一个搜索结果");matchActions.addView(previousMatch,Ui.weight());
-        nextMatch=Ui.button(this,"下一个",()->moveMatch(1),"下一个搜索结果");matchActions.addView(nextMatch,Ui.weight());
-        matchActions.addView(Ui.button(this,"结果列表",this::openSearch,"查看搜索结果列表"),Ui.weight());
-        matchActions.addView(Ui.button(this,"清除",this::clearSearch,"清除搜索结果"),Ui.weight());searchControls.addView(matchActions);
+        previousMatch=Ui.secondaryToken(this,"上一个",()->moveMatch(-1),"上一个搜索结果");matchActions.addView(previousMatch,Ui.weight());
+        nextMatch=Ui.secondaryToken(this,"下一个",()->moveMatch(1),"下一个搜索结果");matchActions.addView(nextMatch,Ui.weight());
+        matchActions.addView(Ui.secondaryToken(this,"结果列表",this::openSearch,"查看搜索结果列表"),Ui.weight());
+        matchActions.addView(Ui.secondaryToken(this,"清除",this::clearSearch,"清除搜索结果"),Ui.weight());searchControls.addView(matchActions);
         searchControls.setVisibility(View.GONE);root.addView(searchControls);
         horizontalPages = supportsPaging() && prefs.getBoolean("readerHorizontalPages", false);
         pageIndex = pageAnchor = enterPageDirection = 0;
@@ -484,25 +486,25 @@ public final class ReaderActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         footer = Ui.row(this);
         Ui.pad(footer, 4);
-        previousRead = Ui.button(this, "上一章", () -> turnFromFooter(-1));
+        previousRead = Ui.secondaryToken(this, "上一章", () -> turnFromFooter(-1), "上一章");
         // READ-1：稳定 resource-id，设备自动化按 id 取控件，不依赖随模式变化的文案。
         previousRead.setId(R.id.readerPrevPage);
-        nextRead = Ui.button(this, "下一章", () -> turnFromFooter(1));
+        nextRead = Ui.secondaryToken(this, "下一章", () -> turnFromFooter(1), "下一章");
         nextRead.setId(R.id.readerNextPage);
         // 目录已上提到固定主栏，页脚只保留翻章；R.id.readerToc 仍稳定指向主栏目录按钮。
         footer.addView(previousRead, Ui.weight());
         footer.addView(nextRead, Ui.weight());
         refreshPageControls();
         root.addView(footer);
-        progress = Ui.text(this, "", 12, Ui.MUTED);
+        progress = Ui.text(this, "", 12, Ui.color(this, UiTokens.Role.SECONDARY));
         progress.setGravity(android.view.Gravity.CENTER);
         progress.setPadding(0, 0, 0, Ui.dp(this, 10));
         root.addView(progress);
-        cssStatus = Ui.text(this, "", 11, Ui.MUTED);
+        cssStatus = Ui.text(this, "", 11, Ui.color(this, UiTokens.Role.SECONDARY));
         cssStatus.setGravity(android.view.Gravity.CENTER);
         cssStatus.setVisibility(View.GONE); // v2.1 页脚降噪：默认隐藏，仅非默认/异常态显示
         root.addView(cssStatus);
-        themeStatus = Ui.text(this, "", 11, Ui.MUTED);
+        themeStatus = Ui.text(this, "", 11, Ui.color(this, UiTokens.Role.SECONDARY));
         themeStatus.setGravity(android.view.Gravity.CENTER);
         themeStatus.setVisibility(View.GONE);
         root.addView(themeStatus);
@@ -631,12 +633,20 @@ public final class ReaderActivity extends Activity {
         }
     }
 
-    /** 设置面板分组小标题：暖纸外壳下使用柔和鼠尾草分组胶囊，适配窄屏。 */
+    /** v4 I2b：chrome 描边卡片，底色与描边均走方向令牌（A11Y-1 的 Ui.LINE 常量值不动）。 */
+    private android.graphics.drawable.GradientDrawable chromeCard(int radiusDp) {
+        android.graphics.drawable.GradientDrawable d =
+                Ui.shape(Ui.color(this, UiTokens.Role.SURFACE), radiusDp, this);
+        d.setStroke(Ui.dp(this, 1), Ui.color(this, UiTokens.Role.DIVIDER));
+        return d;
+    }
+
+    /** 设置面板分组小标题：方向令牌外壳，适配窄屏。 */
     private TextView sectionTitle(String label) {
-        TextView t = Ui.text(this, label, 12, Color.rgb(55, 79, 63));
+        TextView t = Ui.text(this, label, 12, Ui.color(this, UiTokens.Role.SECONDARY));
         t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         t.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        t.setBackground(Ui.outline(this, Color.rgb(232, 239, 227), 10));
+        t.setBackground(chromeCard(10));
         t.setPadding(Ui.dp(this, 12), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, Ui.dp(this, 10), 0, Ui.dp(this, 4));
@@ -645,10 +655,9 @@ public final class ReaderActivity extends Activity {
     }
 
     private Button settingsItemButton(String label, Runnable onClick, String desc) {
-        Button b = Ui.button(this, label, onClick, desc);
+        Button b = Ui.secondaryToken(this, label, onClick, desc);
         b.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.LEFT);
-        b.setTextColor(Color.rgb(38, 53, 44));
-        b.setBackground(Ui.outline(this, Color.WHITE, 10));
+        // 底色/文字/描边已由 secondaryToken 走方向令牌，不再用旧常量覆写。
         b.setMinHeight(Ui.dp(this, 52));
         b.setPadding(Ui.dp(this, 14), Ui.dp(this, 10), Ui.dp(this, 14), Ui.dp(this, 10));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
@@ -663,15 +672,14 @@ public final class ReaderActivity extends Activity {
      */
     private Button settingsItemButton(java.util.function.Supplier<String> labelSupplier, Runnable onClick, String desc) {
         final Button[] holder = new Button[1];
-        holder[0] = Ui.button(this, labelSupplier.get(), () -> {
+        holder[0] = Ui.secondaryToken(this, labelSupplier.get(), () -> {
             onClick.run();
             holder[0].setText(labelSupplier.get());
             // A11Y-1: desc 与文案同步，避免 TalkBack 在档位切换后仍读到旧状态。
             holder[0].setContentDescription(labelSupplier.get());
         }, desc);
         holder[0].setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.LEFT);
-        holder[0].setTextColor(Color.rgb(38, 53, 44));
-        holder[0].setBackground(Ui.outline(this, Color.WHITE, 10));
+        // 底色/文字/描边已由 secondaryToken 走方向令牌，不再用旧常量覆写。
         holder[0].setMinHeight(Ui.dp(this, 52));
         holder[0].setPadding(Ui.dp(this, 14), Ui.dp(this, 10), Ui.dp(this, 14), Ui.dp(this, 10));
         LinearLayout.LayoutParams dynamicLp = new LinearLayout.LayoutParams(-1, -2);
@@ -1478,7 +1486,7 @@ public final class ReaderActivity extends Activity {
         search.setHint("输入章节标题关键词");
         search.setContentDescription("目录搜索框");
         panel.addView(search, new LinearLayout.LayoutParams(-1, -2));
-        final TextView matchStatus = Ui.text(this, "", 13, Ui.MUTED);
+        final TextView matchStatus = Ui.text(this, "", 13, Ui.color(this, UiTokens.Role.SECONDARY));
         final ListView list = new ListView(this);
         list.setContentDescription("章节列表");
         final List<Integer> rowMapping = new ArrayList<>();
@@ -1486,7 +1494,7 @@ public final class ReaderActivity extends Activity {
             LinearLayout statusRow = Ui.row(this);
             matchStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
             statusRow.addView(matchStatus, Ui.weight());
-            statusRow.addView(Ui.button(this, "定位当前章", () -> {
+            statusRow.addView(Ui.secondaryToken(this, "定位当前章", () -> {
                 if (search.length() > 0) search.setText("");
                 int row = rowMapping.indexOf(chapter);
                 if (row >= 0) list.setSelection(row);
@@ -1708,20 +1716,20 @@ public final class ReaderActivity extends Activity {
         regexInput.setHint("自定义正则，例如 ^第\\d+章");
         regexInput.setText(stored == null ? "" : stored);
         regexInput.setContentDescription("自定义章节正则");
-        final TextView validation = Ui.text(this, "", 12, Ui.MUTED);
+        final TextView validation = Ui.text(this, "", 12, Ui.color(this, UiTokens.Role.SECONDARY));
         final AlertDialog[] dialogHolder = new AlertDialog[1];
         final ChapterRule[] readyRule = {null};
 
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 18);
-        panel.addView(Ui.text(this, "范围：仅本书　默认来自：全局规则", 13, Ui.MUTED));
-        panel.addView(Ui.text(this, "自定义档补充保守判定。Android 仅支持简单正则，如 ^第\\d+章。", 12, Ui.MUTED));
+        panel.addView(Ui.text(this, "范围：仅本书　默认来自：全局规则", 13, Ui.color(this, UiTokens.Role.SECONDARY)));
+        panel.addView(Ui.text(this, "自定义档补充保守判定。Android 仅支持简单正则，如 ^第\\d+章。", 12, Ui.color(this, UiTokens.Role.SECONDARY)));
         Ui.gap(panel, 8);
-        final TextView preview = Ui.text(this, "命中预览：计算中…", 14, Ui.MUTED);
-        final TextView sampleLabel = Ui.text(this, "样本：第 1 章（源文件解码）", 13, Ui.MUTED);
+        final TextView preview = Ui.text(this, "命中预览：计算中…", 14, Ui.color(this, UiTokens.Role.SECONDARY));
+        final TextView sampleLabel = Ui.text(this, "样本：第 1 章（源文件解码）", 13, Ui.color(this, UiTokens.Role.SECONDARY));
         LinearLayout sampleRow = Ui.row(this);
         sampleRow.addView(sampleLabel, Ui.weight());
-        sampleRow.addView(Ui.button(this, "取其他章节作为样本", () -> {
+        sampleRow.addView(Ui.secondaryToken(this, "取其他章节作为样本", () -> {
             if (book == null || book.size() <= 1) return;
             sampleChapter[0] = (sampleChapter[0] + 1) % book.size();
             sampleLabel.setText(sampleChapter[0] == 0
@@ -1738,7 +1746,7 @@ public final class ReaderActivity extends Activity {
         Button[] buttons = new Button[4];
         for (int i = 0; i < buttons.length; i++) {
             final int which = i;
-            buttons[i] = Ui.button(this, modeButtonLabels(selected[0])[i], () -> {
+            buttons[i] = Ui.secondaryToken(this, modeButtonLabels(selected[0])[i], () -> {
                 selected[0] = which;
                 refreshModeButtons(buttons, selected[0]);
                 scheduleRulePreview(dialogHolder[0], preview, validation, readyRule, which,
@@ -2025,11 +2033,11 @@ public final class ReaderActivity extends Activity {
     private void openAiPanel() {
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 18);
-        panel.addView(Ui.text(this, org.openleaf.reader.core.AiAssist.PRIVACY_NOTICE, 13, Ui.MUTED));
+        panel.addView(Ui.text(this, org.openleaf.reader.core.AiAssist.PRIVACY_NOTICE, 13, Ui.color(this, UiTokens.Role.SECONDARY)));
         Ui.gap(panel, 12);
         final boolean[] on = {AiClient.enabled(this)};
         final Button[] toggle = new Button[1];
-        toggle[0] = Ui.button(this, "AI 摘要：" + (on[0] ? "开" : "关"), () -> {
+        toggle[0] = Ui.secondaryToken(this, "AI 摘要：" + (on[0] ? "开" : "关"), () -> {
             on[0] = !on[0];
             toggle[0].setText("AI 摘要：" + (on[0] ? "开" : "关"));
         }, "切换 AI 摘要");
@@ -2044,7 +2052,7 @@ public final class ReaderActivity extends Activity {
         endpointField.setSingleLine(true);
         endpointField.setText(AiClient.endpoint(this));
         panel.addView(endpointField);
-        panel.addView(Ui.button(this, "清除已保存的 key", () -> {
+        panel.addView(Ui.secondaryToken(this, "清除已保存的 key", () -> {
             AiClient.clearKey(this); keyField.setText("");
             Toast.makeText(this, "已清除 API key", Toast.LENGTH_SHORT).show();
         }, "清除 API key"));
@@ -2082,7 +2090,7 @@ public final class ReaderActivity extends Activity {
     }
 
     private void showAiResult(String title, String body) {
-        TextView content = Ui.text(this, body, 14, Ui.INK);
+        TextView content = Ui.text(this, body, 14, Ui.color(this, UiTokens.Role.PRIMARY));
         content.setTextIsSelectable(true);
         Ui.pad(content, 18);
         new android.app.AlertDialog.Builder(this).setTitle(title).setView(content)
@@ -2315,41 +2323,41 @@ public final class ReaderActivity extends Activity {
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 14);
 
-        panel.addView(Ui.text(this, "全局三态（不变的三态语义）", 13, Ui.MUTED));
+        panel.addView(Ui.text(this, "全局三态（不变的三态语义）", 13, Ui.color(this, UiTokens.Role.SECONDARY)));
         LinearLayout modes = Ui.row(this);
         int mode = fonts.mode();
-        modes.addView(Ui.button(this, (mode == ReaderFonts.MODE_SYSTEM ? "● " : "○ ") + "跟随系统",
+        modes.addView(Ui.secondaryToken(this, (mode == ReaderFonts.MODE_SYSTEM ? "● " : "○ ") + "跟随系统",
                 () -> { fonts.saveMode(ReaderFonts.MODE_SYSTEM); afterFontChange(); reopenFontSettings(); },
                 "全局-跟随系统"), Ui.weight());
-        modes.addView(Ui.button(this, (mode == ReaderFonts.MODE_BUILTIN ? "● " : "○ ") + "内置默认",
+        modes.addView(Ui.secondaryToken(this, (mode == ReaderFonts.MODE_BUILTIN ? "● " : "○ ") + "内置默认",
                 () -> { fonts.saveMode(ReaderFonts.MODE_BUILTIN); afterFontChange(); reopenFontSettings(); },
                 "全局-内置默认"), Ui.weight());
-        modes.addView(Ui.button(this, (mode == ReaderFonts.MODE_USER ? "● " : "○ ") + "使用收藏字体",
+        modes.addView(Ui.secondaryToken(this, (mode == ReaderFonts.MODE_USER ? "● " : "○ ") + "使用收藏字体",
                 () -> { fonts.saveMode(ReaderFonts.MODE_USER); afterFontChange(); reopenFontSettings(); },
                 "全局-使用收藏字体"), Ui.weight());
         panel.addView(modes);
         Ui.gap(panel, 10);
 
-        panel.addView(Ui.text(this, "收藏字体（点击卡片＝仅对本书使用）", 13, Ui.MUTED));
+        panel.addView(Ui.text(this, "收藏字体（点击卡片＝仅对本书使用）", 13, Ui.color(this, UiTokens.Role.SECONDARY)));
         // D1：卡片容器直接挂到 panel，由外层 panelScroll 统一滚动。
         // 内层固定 300dp ScrollView 与同向外层嵌套会吃掉竖直手势，导致第 3 张起不可达。
         fontCardsContainer = Ui.column(this);
         panel.addView(fontCardsContainer, new LinearLayout.LayoutParams(-1, -2));
 
         Ui.gap(panel, 8);
-        panel.addView(Ui.button(this, "＋ 添加字体（TTF / OTF）", this::launchFontPicker, "添加字体"),
+        panel.addView(Ui.secondaryToken(this, "＋ 添加字体（TTF / OTF）", this::launchFontPicker, "添加字体"),
                 new LinearLayout.LayoutParams(-1, -2));
         Ui.gap(panel, 4);
-        panel.addView(Ui.button(this, "仅对本书使用…", this::openBookFontDialog, "仅对本书使用"),
+        panel.addView(Ui.secondaryToken(this, "仅对本书使用…", this::openBookFontDialog, "仅对本书使用"),
                 new LinearLayout.LayoutParams(-1, -2));
         Ui.gap(panel, 4);
-        panel.addView(Ui.button(this, "清除本书字体（回落全局）",
+        panel.addView(Ui.secondaryToken(this, "清除本书字体（回落全局）",
                 () -> { fonts.clearBookFont(id); afterFontChange(); reopenFontSettings(); },
                 "清除本书字体"), new LinearLayout.LayoutParams(-1, -2));
         Ui.gap(panel, 8);
         panel.addView(Ui.text(this,
                 "仅对 TXT/MD 正文生效；字体为你自带，OpenLeaf 不内置、不下载字体。跟随系统时按书字体不生效。",
-                12, Ui.MUTED));
+                12, Ui.color(this, UiTokens.Role.SECONDARY)));
 
         ScrollView panelScroll = new ScrollView(this);
         panelScroll.addView(panel);
@@ -2379,7 +2387,7 @@ public final class ReaderActivity extends Activity {
         if (fontCardsContainer == null || isDestroyed()) return;
         fontCardsContainer.removeAllViews();
         if (fontDialogEntries.isEmpty()) {
-            fontCardsContainer.addView(Ui.text(this, "还没有收藏字体，点下方「添加字体」开始。", 13, Ui.MUTED));
+            fontCardsContainer.addView(Ui.text(this, "还没有收藏字体，点下方「添加字体」开始。", 13, Ui.color(this, UiTokens.Role.SECONDARY)));
             return;
         }
         String globalId = fonts.globalFontId();
@@ -2528,7 +2536,7 @@ public final class ReaderActivity extends Activity {
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 14);
 
-        views.presetTitle = Ui.text(this, "", 13, Ui.MUTED);
+        views.presetTitle = Ui.text(this, "", 13, Ui.color(this, UiTokens.Role.SECONDARY));
         views.presetTitle.setContentDescription("当前预设");
         panel.addView(views.presetTitle);
         Ui.gap(panel, 4);
@@ -2536,7 +2544,7 @@ public final class ReaderActivity extends Activity {
         views.presets = new Button[PRESET_NAMES.length];
         for (int i = 0; i < PRESET_NAMES.length; i++) {
             final int presetId = ReaderPresets.COMPACT + i; // 与 PRESET_NAMES 顺序一致
-            views.presets[i] = Ui.button(this, PRESET_NAMES[i], () -> {
+            views.presets[i] = Ui.secondaryToken(this, PRESET_NAMES[i], () -> {
                 if (styleDraft == null) return;
                 styleDraft.applyPreset(presetId);
                 refreshStylePreview();
@@ -2548,16 +2556,16 @@ public final class ReaderActivity extends Activity {
 
         // 字号纳入草稿：−/＋ 各 ±2，clamp 与 settings() 的既有入口一致（14–32）。
         LinearLayout sizeRow = Ui.row(this);
-        sizeRow.addView(Ui.button(this, "字号 −", () -> {
+        sizeRow.addView(Ui.secondaryToken(this, "字号 −", () -> {
             if (styleDraft == null) return;
             styleDraft.setFontSize(Math.max(StyleDraft.MIN_FONT_SIZE, styleDraft.fontSize() - 2));
             refreshStylePreview();
         }, "字号减小"));
-        views.sizeValue = Ui.text(this, "", 16, Ui.INK);
+        views.sizeValue = Ui.text(this, "", 16, Ui.color(this, UiTokens.Role.PRIMARY));
         views.sizeValue.setGravity(android.view.Gravity.CENTER);
         views.sizeValue.setContentDescription("当前字号");
         sizeRow.addView(views.sizeValue, Ui.weight());
-        sizeRow.addView(Ui.button(this, "字号 ＋", () -> {
+        sizeRow.addView(Ui.secondaryToken(this, "字号 ＋", () -> {
             if (styleDraft == null) return;
             styleDraft.setFontSize(Math.min(StyleDraft.MAX_FONT_SIZE, styleDraft.fontSize() + 2));
             refreshStylePreview();
@@ -2570,12 +2578,12 @@ public final class ReaderActivity extends Activity {
         views.preview.setContentDescription("排版小样预览");
         LinearLayout previewBox = Ui.column(this);
         Ui.pad(previewBox, 10);
-        previewBox.setBackground(Ui.outline(this, Ui.LINE, 8));
+        previewBox.setBackground(chromeCard(8));
         previewBox.addView(views.preview, new LinearLayout.LayoutParams(-1, -2));
         panel.addView(previewBox, new LinearLayout.LayoutParams(-1, -2));
         Ui.gap(panel, 8);
 
-        views.reflow = Ui.button(this, "", () -> {
+        views.reflow = Ui.secondaryToken(this, "", () -> {
             if (styleDraft == null) return;
             styleDraft.setParagraphReflow(!styleDraft.paragraphReflow());
             refreshStylePreview();
@@ -2585,35 +2593,35 @@ public final class ReaderActivity extends Activity {
 
         // 字体/颜色是独立即时入口，不进草稿；面板内只静态展示当前生效字体与范围。
         // v4 I2：把即时生效与草稿语义写进界面，避免用户误以为「取消」会撤销字体/资源操作。
-        panel.addView(Ui.text(this, "字体与颜色为即时生效设置，不进草稿；取消排版不会撤销导入字体或下载资源。", 12, Ui.MUTED));
-        panel.addView(Ui.text(this, "当前生效字体：" + effectiveFontDescription(), 13, Ui.MUTED));
-        panel.addView(Ui.text(this, "设置范围：" + ReaderFonts.describeMode(fonts.mode()), 13, Ui.MUTED));
+        panel.addView(Ui.text(this, "字体与颜色为即时生效设置，不进草稿；取消排版不会撤销导入字体或下载资源。", 12, Ui.color(this, UiTokens.Role.SECONDARY)));
+        panel.addView(Ui.text(this, "当前生效字体：" + effectiveFontDescription(), 13, Ui.color(this, UiTokens.Role.SECONDARY)));
+        panel.addView(Ui.text(this, "设置范围：" + ReaderFonts.describeMode(fonts.mode()), 13, Ui.color(this, UiTokens.Role.SECONDARY)));
         if (fonts.mode() == ReaderFonts.MODE_SYSTEM) {
-            panel.addView(Ui.text(this, "跟随系统时本书字体覆盖不生效", 12, Ui.MUTED));
+            panel.addView(Ui.text(this, "跟随系统时本书字体覆盖不生效", 12, Ui.color(this, UiTokens.Role.SECONDARY)));
         }
         Ui.gap(panel, 4);
         // 保留旧自动化钩子「排版项-8」；语义仍是跳独立字体对话框。
-        panel.addView(Ui.button(this, "正文字体 ›", () -> {
+        panel.addView(Ui.secondaryToken(this, "正文字体 ›", () -> {
             dialogHolder[0].dismiss();
             openFontSettings();
         }, "排版项-8"), new LinearLayout.LayoutParams(-1, -2));
         Ui.gap(panel, 4);
-        panel.addView(Ui.button(this, "背景色：" + colorLabel(true), () -> {
+        panel.addView(Ui.secondaryToken(this, "背景色：" + colorLabel(true), () -> {
             dialogHolder[0].dismiss();
             openColorPicker(true);
         }, "背景色"), new LinearLayout.LayoutParams(-1, -2));
         Ui.gap(panel, 4);
-        panel.addView(Ui.button(this, "字色：" + colorLabel(false), () -> {
+        panel.addView(Ui.secondaryToken(this, "字色：" + colorLabel(false), () -> {
             dialogHolder[0].dismiss();
             openColorPicker(false);
         }, "字色"), new LinearLayout.LayoutParams(-1, -2));
         Ui.gap(panel, 8);
 
-        panel.addView(Ui.text(this, "逐项微调（仅刷小样，点应用才生效；取消/返回/点外部关闭均零写入）", 13, Ui.MUTED));
+        panel.addView(Ui.text(this, "逐项微调（仅刷小样，点应用才生效；取消/返回/点外部关闭均零写入）", 13, Ui.color(this, UiTokens.Role.SECONDARY)));
         views.options = new Button[8];
         for (int i = 0; i < views.options.length; i++) {
             final int which = i;
-            views.options[i] = Ui.button(this, "", () -> {
+            views.options[i] = Ui.secondaryToken(this, "", () -> {
                 if (styleDraft == null) return;
                 switch (which) {
                     case 0: styleDraft.setLineSpacing((styleDraft.lineSpacing() + 1) % ReaderStyle.LINE_SPACING.length); break;
@@ -2635,8 +2643,8 @@ public final class ReaderActivity extends Activity {
 
         Ui.gap(panel, 10);
         LinearLayout actions = Ui.row(this);
-        actions.addView(Ui.button(this, "取消", () -> dialogHolder[0].dismiss(), "取消排版"), Ui.weight());
-        actions.addView(Ui.button(this, "应用", () -> applyStyleDraft(dialogHolder[0]), "应用排版"), Ui.weight());
+        actions.addView(Ui.secondaryToken(this, "取消", () -> dialogHolder[0].dismiss(), "取消排版"), Ui.weight());
+        actions.addView(Ui.primaryToken(this, "应用", () -> applyStyleDraft(dialogHolder[0]), "应用排版"), Ui.weight());
         panel.addView(actions);
 
         ScrollView panelScroll = new ScrollView(this);
@@ -2873,8 +2881,8 @@ public final class ReaderActivity extends Activity {
     private void settings() {
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 14);
-        panel.setBackgroundColor(Color.rgb(247, 243, 234));
-        panel.addView(Ui.text(this, "按阅读任务分组；每项显示当前值，打开或关闭不会改变正文锚点。", 14, Ui.MUTED));
+        panel.setBackgroundColor(Ui.color(this, UiTokens.Role.SURFACE));
+        panel.addView(Ui.text(this, "按阅读任务分组；每项显示当前值，打开或关闭不会改变正文锚点。", 14, Ui.color(this, UiTokens.Role.SECONDARY)));
         Button visualEntry = settingsItemButton("可视选项  ·  字体、字号、主题", this::visualSettings, "可视选项");
         visualEntry.setOnClickListener(v -> { lastOptionsTrigger = v; visualSettings(); });
         panel.addView(visualEntry);
@@ -2968,7 +2976,7 @@ public final class ReaderActivity extends Activity {
         panel.addView(mode);
         panel.addView(motion);
         panel.addView(Ui.text(this, supportsPaging() ? "左右划动或使用底部按钮翻页。系统停用动画时不会播放翻页动画。"
-                : "左右分页仅适用于本地 TXT / MD。", 13, Ui.MUTED));
+                : "左右分页仅适用于本地 TXT / MD。", 13, Ui.color(this, UiTokens.Role.SECONDARY)));
         panel.addView(sectionTitle("阅读操作"));
         panel.addView(settingsItemButton(
                 () -> "自动翻页：" + (autoTurnIndex == 0 ? "关闭" : (AUTO_TURN_INTERVALS[autoTurnIndex] / 1000) + " 秒"),
@@ -3007,16 +3015,16 @@ public final class ReaderActivity extends Activity {
 
     private void showReaderOptions(String title, LinearLayout panel) {
         final View returnTo = lastOptionsTrigger; // 面板创建时快照，避免嵌套层覆盖字段
-        panel.setBackgroundColor(Color.rgb(247, 243, 234));
+        panel.setBackgroundColor(Ui.color(this, UiTokens.Role.SURFACE));
         panel.setPadding(Ui.dp(this, 14), Ui.dp(this, 8), Ui.dp(this, 14), Ui.dp(this, 14));
         ScrollView settingsScroll = new ScrollView(this);
-        settingsScroll.setBackgroundColor(Color.rgb(247, 243, 234));
+        settingsScroll.setBackgroundColor(Ui.color(this, UiTokens.Role.SURFACE));
         settingsScroll.addView(panel, new ScrollView.LayoutParams(-1, -2));
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle(title).setView(settingsScroll)
                 .setNegativeButton("关闭", null).create();
         dialog.setOnShowListener(d -> {
             if (dialog.getWindow() != null) {
-                dialog.getWindow().setBackgroundDrawable(Ui.shape(Color.rgb(247, 243, 234), 18, this));
+                dialog.getWindow().setBackgroundDrawable(Ui.shape(Ui.color(this, UiTokens.Role.SURFACE), 18, this));
             }
         });
         dialog.show();

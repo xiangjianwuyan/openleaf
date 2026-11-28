@@ -39,6 +39,7 @@ import android.widget.TextView;
 
 import org.openleaf.reader.core.PageCrop;
 import org.openleaf.reader.core.PdfViewOptions;
+import org.openleaf.reader.core.UiTokens;
 
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
@@ -60,10 +61,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * rendering task/result can be outstanding; repeated navigation replaces the target.
  */
 public final class PdfActivity extends Activity {
-    private static final int CREAM = 0xFFF7F3E8;
-    private static final int GREEN = 0xFF234F3D;
-    private static final int INK = 0xFF283B31;
-    private static final int MUTED = 0xFF6B746B;
+    // v4 I2b：chrome 色常量已移除，工具栏/按钮/状态文字统一走方向令牌；PDF 页面图像仍用自身白底。
     private static final int MAX_WIDTH = 2048;
     private static final int MAX_HEIGHT = 4096;
     private static final long MAX_PIXELS = 4_000_000L;
@@ -171,7 +169,7 @@ public final class PdfActivity extends Activity {
     @android.annotation.SuppressLint("ClickableViewAccessibility") // 双指手势不是点击，监听器返回 false 交给 ScrollView
     private void buildUi(String title) {
         Window window = getWindow();
-        SystemBars.apply(this, CREAM); // 阶段 3-B 收尾：颜色/图标统一，布局标志在下保留
+        SystemBars.apply(this, Ui.color(this, UiTokens.Role.BACKGROUND)); // v4 I2b：方向化 chrome 底色
         if (Build.VERSION.SDK_INT >= 30) {
             window.setDecorFitsSystemWindows(false);
         }
@@ -186,7 +184,7 @@ public final class PdfActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(CREAM);
+        root.setBackgroundColor(Ui.color(this, UiTokens.Role.BACKGROUND));
         int side = dp(12);
         int top = dp(4);
         int bottom = dp(8);
@@ -228,7 +226,7 @@ public final class PdfActivity extends Activity {
         toolbar.addView(back, new LinearLayout.LayoutParams(dp(68), dp(48)));
         TextView heading = new TextView(this);
         heading.setText(title);
-        heading.setTextColor(GREEN);
+        heading.setTextColor(Ui.color(this, UiTokens.Role.ACCENT));
         heading.setTextSize(20);
         heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         heading.setSingleLine(true);
@@ -241,7 +239,7 @@ public final class PdfActivity extends Activity {
 
         status = new TextView(this);
         status.setText("正在打开 PDF…");
-        status.setTextColor(MUTED);
+        status.setTextColor(Ui.color(this, UiTokens.Role.SECONDARY));
         status.setTextSize(13);
         status.setPadding(dp(4), dp(4), dp(4), dp(8));
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
@@ -294,15 +292,15 @@ public final class PdfActivity extends Activity {
         });
         errorView = new TextView(this);
         errorView.setGravity(Gravity.CENTER);
-        errorView.setTextColor(INK);
+        errorView.setTextColor(Ui.color(this, UiTokens.Role.PRIMARY));
         errorView.setTextSize(16);
         errorView.setPadding(dp(20), dp(20), dp(20), dp(20));
-        errorView.setBackgroundColor(CREAM);
+        errorView.setBackgroundColor(Ui.color(this, UiTokens.Role.SURFACE));
         errorView.setVisibility(View.GONE);
         pageArea.addView(errorView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         progress = new ProgressBar(this);
-        progress.setIndeterminateTintList(ColorStateList.valueOf(GREEN));
+        progress.setIndeterminateTintList(ColorStateList.valueOf(Ui.color(this, UiTokens.Role.ACCENT)));
         FrameLayout.LayoutParams progressParams = new FrameLayout.LayoutParams(dp(44), dp(44));
         progressParams.gravity = Gravity.CENTER;
         pageArea.addView(progress, progressParams);
@@ -380,14 +378,16 @@ public final class PdfActivity extends Activity {
         button.setPadding(dp(6), dp(3), dp(6), dp(3));
         button.setTextColor(new ColorStateList(new int[][]{
                 new int[]{android.R.attr.state_enabled}, new int[]{}},
-                new int[]{Color.WHITE, 0xFFEEF0E9}));
+                new int[]{Ui.color(this, UiTokens.Role.ON_ACCENT),
+                        Ui.color(this, UiTokens.Role.ACCENT_SOFT)}));
         GradientDrawable background = new GradientDrawable();
-        background.setColor(GREEN);
+        background.setColor(Ui.color(this, UiTokens.Role.ACCENT));
         background.setCornerRadius(dp(10));
         button.setBackground(background);
         button.setBackgroundTintList(new ColorStateList(new int[][]{
                 new int[]{android.R.attr.state_enabled}, new int[]{}},
-                new int[]{GREEN, 0xFFA6B1A5}));
+                new int[]{Ui.color(this, UiTokens.Role.ACCENT),
+                        Ui.color(this, UiTokens.Role.ACCENT_SOFT)}));
         return button;
     }
 
@@ -624,7 +624,7 @@ public final class PdfActivity extends Activity {
         input.setSingleLine(true);
         input.setInputType(InputType.TYPE_CLASS_NUMBER);
         input.setImeOptions(EditorInfo.IME_ACTION_GO);
-        input.setTextColor(INK);
+        input.setTextColor(Ui.color(this, UiTokens.Role.PRIMARY));
         input.setText(String.valueOf(requestedPage + 1));
         input.selectAll();
         input.setHint("请输入 1 至 " + pageCount);
@@ -645,8 +645,8 @@ public final class PdfActivity extends Activity {
             if (jumpDialog == dialog) jumpDialog = null;
         });
         dialog.setOnShowListener(ignored -> {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(GREEN);
-            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(GREEN);
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(Ui.color(this, UiTokens.Role.ACCENT));
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(Ui.color(this, UiTokens.Role.ACCENT));
             View.OnClickListener jump = view -> {
                 try {
                     int page = Integer.parseInt(input.getText().toString().trim());

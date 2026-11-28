@@ -41,6 +41,7 @@ import org.openleaf.reader.core.Lyrics;
 import org.openleaf.reader.core.MediaSessionIdentity;
 import org.openleaf.reader.core.PlaybackQueue;
 import org.openleaf.reader.core.SpeechText;
+import org.openleaf.reader.core.UiTokens;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -152,9 +153,7 @@ public final class AudioPlayerActivity extends Activity {
     }
     /** 切歌淡入迁到 {@link OpenLeafPlayer#startFadeIn()}（内部仍用 AudioDsp.GainRamp）。 */
 
-    private static final int ACCENT = 0xFF355F51;
-    private static final int ACTIVE = 0xFFDCEAE2;
-    private static final int SURFACE = 0xFFF2F4F0;
+    // v4 I2b：原静态色常量已移除，播控 chrome 统一走方向令牌 Ui.color(this, Role.X)。
     private TextView titleView, subtitleView, lyricView, elapsedView, durationView, stateView, mediaKeyHint;
     private Button playButton, previousButton, nextButton, queueButton, shuffleView, repeatView, addButton;
     private RecordArtwork artwork;
@@ -221,7 +220,8 @@ public final class AudioPlayerActivity extends Activity {
 
     private void buildUi() {
         LinearLayout root = Ui.column(this);
-        Ui.mount(this, root);
+        // v4 I2b：页面 chrome 走方向令牌；解码链/播控行为不变。
+        Ui.mount(this, root, Ui.color(this, UiTokens.Role.BACKGROUND));
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, -1));
@@ -233,6 +233,7 @@ public final class AudioPlayerActivity extends Activity {
         LinearLayout toolbar = Ui.row(this);
         toolbar.addView(iconButton("‹", "返回", this::finish));
         TextView heading = Ui.title(this, "本地音频", 18);
+        heading.setTextColor(Ui.color(this, UiTokens.Role.PRIMARY));
         heading.setGravity(Gravity.CENTER);
         toolbar.addView(heading, Ui.weight());
         toolbar.addView(iconButton("⋯", "更多播放操作", this::openMoreMenu));
@@ -241,7 +242,8 @@ public final class AudioPlayerActivity extends Activity {
 
         FrameLayout cover = new FrameLayout(this);
         GradientDrawable backdrop = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFFDDE8DC, 0xFFECECE0, 0xFFD5E3E0});
+                new int[]{Ui.color(this, UiTokens.Role.SOFT), Ui.color(this, UiTokens.Role.SURFACE),
+                        Ui.color(this, UiTokens.Role.ACCENT_SOFT)});
         backdrop.setCornerRadius(Ui.dp(this, 26));
         cover.setBackground(backdrop);
         int coverSize = Ui.dp(this, Math.max(112, Math.min(200,
@@ -252,7 +254,7 @@ public final class AudioPlayerActivity extends Activity {
         page.addView(cover, new LinearLayout.LayoutParams(-1, coverSize + Ui.dp(this, 22)));
         Ui.gap(page, 8);
 
-        lyricView = Ui.text(this, "未加载歌词", 14, ACCENT);
+        lyricView = Ui.text(this, "未加载歌词", 14, Ui.color(this, UiTokens.Role.ACCENT));
         lyricView.setGravity(Gravity.CENTER);
         lyricView.setMaxLines(2);
         lyricView.setEllipsize(TextUtils.TruncateAt.END);
@@ -262,15 +264,16 @@ public final class AudioPlayerActivity extends Activity {
         LinearLayout track = Ui.row(this);
         LinearLayout trackInfo = Ui.column(this);
         titleView = Ui.title(this, "未选择音频", 25);
+        titleView.setTextColor(Ui.color(this, UiTokens.Role.PRIMARY));
         titleView.setMaxLines(2);
         titleView.setEllipsize(TextUtils.TruncateAt.END);
         trackInfo.addView(titleView);
-        subtitleView = Ui.text(this, "从设备选择音频文件", 14, Ui.MUTED);
+        subtitleView = Ui.text(this, "从设备选择音频文件", 14, Ui.color(this, UiTokens.Role.SECONDARY));
         subtitleView.setMaxLines(2);
         subtitleView.setEllipsize(TextUtils.TruncateAt.END);
         trackInfo.addView(subtitleView);
         track.addView(trackInfo, Ui.weight());
-        stateView = Ui.text(this, "", 12, ACCENT);
+        stateView = Ui.text(this, "", 12, Ui.color(this, UiTokens.Role.ACCENT));
         stateView.setGravity(Gravity.END);
         stateView.setPadding(Ui.dp(this, 10), 0, 0, 0);
         track.addView(stateView);
@@ -278,8 +281,8 @@ public final class AudioPlayerActivity extends Activity {
 
         seekBar = new SeekBar(this);
         seekBar.setContentDescription("播放进度");
-        seekBar.setProgressTintList(ColorStateList.valueOf(ACCENT));
-        seekBar.setThumbTintList(ColorStateList.valueOf(ACCENT));
+        seekBar.setProgressTintList(ColorStateList.valueOf(Ui.color(this, UiTokens.Role.ACCENT)));
+        seekBar.setThumbTintList(ColorStateList.valueOf(Ui.color(this, UiTokens.Role.ACCENT)));
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onStartTrackingTouch(SeekBar s) { seeking = true; }
             @Override public void onStopTrackingTouch(SeekBar s) {
@@ -294,8 +297,8 @@ public final class AudioPlayerActivity extends Activity {
         });
         page.addView(seekBar, new LinearLayout.LayoutParams(-1, Ui.dp(this, 42)));
         LinearLayout timeRow = Ui.row(this);
-        elapsedView = Ui.text(this, "00:00", 12, Ui.MUTED);
-        durationView = Ui.text(this, "—", 12, Ui.MUTED);
+        elapsedView = Ui.text(this, "00:00", 12, Ui.color(this, UiTokens.Role.SECONDARY));
+        durationView = Ui.text(this, "—", 12, Ui.color(this, UiTokens.Role.SECONDARY));
         durationView.setGravity(Gravity.END);
         timeRow.addView(elapsedView, Ui.weight());
         timeRow.addView(durationView, Ui.weight());
@@ -306,9 +309,9 @@ public final class AudioPlayerActivity extends Activity {
         controls.setGravity(Gravity.CENTER);
         previousButton = iconButton("⏮", "上一首", this::previous);
         playButton = iconButton("▶", "播放", this::togglePlay);
-        playButton.setTextColor(0xFFFFFFFF);
+        playButton.setTextColor(Ui.color(this, UiTokens.Role.ON_ACCENT));
         playButton.setTextSize(26);
-        playButton.setBackground(audioRipple(ACCENT, 50));
+        playButton.setBackground(audioRipple(Ui.color(this, UiTokens.Role.ACCENT), 50));
         nextButton = iconButton("⏭", "下一首", this::next);
         controls.addView(previousButton, new LinearLayout.LayoutParams(Ui.dp(this, 54), Ui.dp(this, 50)));
         LinearLayout.LayoutParams playSize = new LinearLayout.LayoutParams(Ui.dp(this, 68), Ui.dp(this, 68));
@@ -330,12 +333,12 @@ public final class AudioPlayerActivity extends Activity {
         page.addView(modes);
         Ui.gap(page, 6);
 
-        addButton = Ui.primary(this, "＋ 添加音频", this::pickAudio);
+        addButton = Ui.primaryToken(this, "＋ 添加音频", this::pickAudio, "添加本地音频文件");
         page.addView(addButton, new LinearLayout.LayoutParams(-1, -2));
-        sleepView = Ui.text(this, "睡眠：关", 12, Ui.MUTED);
+        sleepView = Ui.text(this, "睡眠：关", 12, Ui.color(this, UiTokens.Role.SECONDARY));
         sleepView.setPadding(0, Ui.dp(this, 4), 0, 0);
         page.addView(sleepView);
-        mediaKeyHint = Ui.text(this, "", 12, Ui.MUTED);
+        mediaKeyHint = Ui.text(this, "", 12, Ui.color(this, UiTokens.Role.SECONDARY));
         mediaKeyHint.setVisibility(View.GONE);
         page.addView(mediaKeyHint);
 
@@ -358,20 +361,20 @@ public final class AudioPlayerActivity extends Activity {
     }
 
     private Button iconButton(String icon, String description, Runnable action) {
-        Button button = Ui.button(this, icon, action, description);
+        Button button = Ui.secondaryToken(this, icon, action, description);
         button.setTextSize(24);
         button.setPadding(0, 0, 0, 0);
-        button.setBackground(audioRipple(SURFACE, 28));
+        button.setBackground(audioRipple(Ui.color(this, UiTokens.Role.SURFACE), 28));
         button.setMinimumWidth(Ui.dp(this, 48));
         button.setMinimumHeight(Ui.dp(this, 48));
         return button;
     }
 
     private Button addAction(LinearLayout row, String label, Runnable action) {
-        Button button = Ui.button(this, label, action);
+        Button button = Ui.secondaryToken(this, label, action, label);
         button.setMinimumHeight(Ui.dp(this, 48));
         button.setPadding(Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
-        button.setBackground(audioRipple(SURFACE, 12));
+        button.setBackground(audioRipple(Ui.color(this, UiTokens.Role.SURFACE), 12));
         LinearLayout.LayoutParams params = Ui.weight();
         if (row.getChildCount() > 0) params.setMarginStart(Ui.dp(this, 6));
         row.addView(button, params);
@@ -512,12 +515,12 @@ public final class AudioPlayerActivity extends Activity {
         if (debugLog) android.util.Log.d(TAG, "panel=effect action=open");
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 16);
-        TextView capabilityNote = Ui.text(this, "", 12, Ui.MUTED);
+        TextView capabilityNote = Ui.text(this, "", 12, Ui.color(this, UiTokens.Role.SECONDARY));
         String capabilityMessage = AudioCapability.message(currentAudioCapabilityLevel());
         if (capabilityMessage.isEmpty()) capabilityNote.setVisibility(View.GONE);
         else capabilityNote.setText(capabilityMessage);
         panel.addView(capabilityNote);
-        panel.addView(Ui.text(this, "均衡器", 11, Ui.MUTED)); // v2.2 分组小标题：不改任何控件行为
+        panel.addView(Ui.text(this, "均衡器", 11, Ui.color(this, UiTokens.Role.SECONDARY))); // v2.2 分组小标题：不改任何控件行为
         addToggleRow(this, panel, "均衡器（5 段）", eqOn, v -> {
             eqOn = v; applyAudioChain(); saveState();
         });
@@ -527,7 +530,7 @@ public final class AudioPlayerActivity extends Activity {
         for (int i = 0; i < names.length; i++) {
             final int idx = i;
             LinearLayout row = Ui.row(this);
-            labels[i] = Ui.text(this, "", 12, Ui.MUTED);
+            labels[i] = Ui.text(this, "", 12, Ui.color(this, UiTokens.Role.SECONDARY));
             labels[i].setMinWidth(Ui.dp(this, 92));
             row.addView(labels[i]);
             SeekBar bar = new SeekBar(this);
@@ -547,7 +550,7 @@ public final class AudioPlayerActivity extends Activity {
             panel.addView(row);
             bars[idx] = bar;
         }
-        panel.addView(Ui.text(this, "动态与可视化", 11, Ui.MUTED)); // v2.2 分组小标题
+        panel.addView(Ui.text(this, "动态与可视化", 11, Ui.color(this, UiTokens.Role.SECONDARY))); // v2.2 分组小标题
         addToggleRow(this, panel, "峰值限幅（softClip）", clipOn, v -> {
             clipOn = v; applyAudioChain(); saveState();
         });
@@ -557,7 +560,7 @@ public final class AudioPlayerActivity extends Activity {
             if (spectrumView != null) spectrumView.setVisibility(v ? View.VISIBLE : View.GONE);
             saveState();
         });
-        panel.addView(Ui.text(this, "音质相关内容需真机听感验证；模拟器无音频输出。", 12, Ui.MUTED));
+        panel.addView(Ui.text(this, "音质相关内容需真机听感验证；模拟器无音频输出。", 12, Ui.color(this, UiTokens.Role.SECONDARY)));
         new AlertDialog.Builder(this).setTitle("音效").setView(panel)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("应用", (d, w) -> {
@@ -627,8 +630,8 @@ public final class AudioPlayerActivity extends Activity {
     private void updateModeLabels() {
         shuffleView.setText("随机：" + (shuffled ? "开" : "关"));
         repeatView.setText("循环：" + (repeat == Repeat.NONE ? "关" : repeat == Repeat.ONE ? "单曲" : "全部"));
-        shuffleView.setBackground(audioRipple(shuffled ? ACTIVE : SURFACE, 12));
-        repeatView.setBackground(audioRipple(repeat != Repeat.NONE ? ACTIVE : SURFACE, 12));
+        shuffleView.setBackground(audioRipple(shuffled ? Ui.color(this, UiTokens.Role.ACCENT_SOFT) : Ui.color(this, UiTokens.Role.SURFACE), 12));
+        repeatView.setBackground(audioRipple(repeat != Repeat.NONE ? Ui.color(this, UiTokens.Role.ACCENT_SOFT) : Ui.color(this, UiTokens.Role.SURFACE), 12));
     }
 
     private void resetTrackUi() {
@@ -689,7 +692,7 @@ public final class AudioPlayerActivity extends Activity {
     private void openLyricsPanel() {
         if (debugLog) android.util.Log.d(TAG, "panel=lyrics action=open");
         ScrollView scroll = new ScrollView(this);
-        TextView content = Ui.text(this, "", 15, Ui.INK);
+        TextView content = Ui.text(this, "", 15, Ui.color(this, UiTokens.Role.PRIMARY));
         Ui.pad(content, 16);
         content.setLineSpacing(Ui.dp(this, 5), 1f);
         if (lyrics.isEmpty()) {
@@ -725,17 +728,17 @@ public final class AudioPlayerActivity extends Activity {
         LinearLayout panel = Ui.column(this);
         Ui.pad(panel, 16);
         if (queue.isEmpty()) {
-            panel.addView(Ui.text(this, "队列为空。添加设备上的音频文件后，可以在此查看播放顺序。", 14, Ui.MUTED));
+            panel.addView(Ui.text(this, "队列为空。添加设备上的音频文件后，可以在此查看播放顺序。", 14, Ui.color(this, UiTokens.Role.SECONDARY)));
         } else {
-            panel.addView(Ui.text(this, "本地播放顺序 · " + queue.size() + " 首", 13, Ui.MUTED));
+            panel.addView(Ui.text(this, "本地播放顺序 · " + queue.size() + " 首", 13, Ui.color(this, UiTokens.Role.SECONDARY)));
             Ui.gap(panel, 8);
             for (int i = 0; i < queue.size(); i++) {
                 boolean selected = i == currentIndex;
                 String line = (i + 1) + ". " + displayName(queue.get(i));
                 if (selected) line += "\n当前曲目";
-                TextView entry = selected ? Ui.title(this, line, 15) : Ui.text(this, line, 14, Ui.INK);
+                TextView entry = selected ? Ui.title(this, line, 15) : Ui.text(this, line, 14, Ui.color(this, UiTokens.Role.PRIMARY));
                 Ui.pad(entry, 10);
-                if (selected) entry.setBackground(audioShape(ACTIVE, 12));
+                if (selected) entry.setBackground(audioShape(Ui.color(this, UiTokens.Role.ACCENT_SOFT), 12));
                 panel.addView(entry);
             }
         }
@@ -757,7 +760,7 @@ public final class AudioPlayerActivity extends Activity {
     private void addToggleRow(Context ctx, LinearLayout parent, String label, boolean initial, ToggleListener cb) {
         final boolean[] value = {initial};
         final Button[] holder = new Button[1];
-        holder[0] = Ui.button(this, label + "：" + (initial ? "开" : "关"), () -> {
+        holder[0] = Ui.secondaryToken(this, label + "：" + (initial ? "开" : "关"), () -> {
             value[0] = !value[0];
             holder[0].setText(label + "：" + (value[0] ? "开" : "关"));
             cb.onChanged(value[0]);
