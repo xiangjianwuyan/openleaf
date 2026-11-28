@@ -1,6 +1,7 @@
 package org.openleaf.reader;
 
 import org.openleaf.reader.application.ServiceRegistry;
+import org.openleaf.reader.core.Direction;
 import org.openleaf.reader.core.DropBatch;
 import org.openleaf.reader.core.ImportUseCase;
 import org.openleaf.reader.core.NavDestination;
@@ -449,22 +450,9 @@ public final class MainActivity extends Activity {
         if (dest == NavDestination.SHELF) library();
         else if (dest == NavDestination.MEDIA) network();
         else if (dest == NavDestination.EXTENSIONS) {
-            // I3：扩展一级目的地外壳。P1-A 才填真实内容；本轮只呈现真实边界，
-            // 不渲染假市场/假插件/假权限开关，也不直接跳转 PluginActivity。
-            LinearLayout body=content();
-            body.addView(Ui.tokenText(this,"扩展",UiTokens.Typography.PAGE_TITLE,UiTokens.Role.PRIMARY));
-            Ui.gap(body,UiTokens.spacingDp(UiTokens.Spacing.LG));
-            body.addView(Ui.text(this,"发现",18,Ui.color(this,UiTokens.Role.PRIMARY)));
-            Ui.gap(body,6);
-            body.addView(Ui.text(this,
-                    "当前暂无可发现的扩展来源。扩展能力依赖后续宿主执行机制；在此之前，本地导入、阅读、播放与数据设置均可正常使用。",
-                    14,Ui.color(this,UiTokens.Role.SECONDARY)));
-            Ui.gap(body,16);
-            body.addView(Ui.text(this,"已安装",18,Ui.color(this,UiTokens.Role.PRIMARY)));
-            Ui.gap(body,6);
-            body.addView(Ui.text(this,
-                    "当前未安装扩展。扩展清单遵循真实边界（schema 1 · txt-report · TXT/MD · 16KiB/20/1MiB）；安装与管理入口将随扩展能力一并开放，本轮不提供假安装或假市场。",
-                    14,Ui.color(this,UiTokens.Role.SECONDARY)));
+            // P1-A：扩展一级目的地承载真实壳层（发现边界 + 已安装真实清单）。
+            // 无假市场/假插件/假权限开关；安装/启停/运行/移除的真实路径由 PluginActivity 承接。
+            ExtensionScreen.render(this, content());
         }
         else about(); // 我的：阅读与记录 / 文件与任务 / 数据与设置
         if(pendingLegacyNotice!=null){
@@ -624,7 +612,11 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("扩展与导入来源")
                 .setMessage(PickerImport.extensionBoundaryText(this))
                 .setNegativeButton("知道了", null)
-                .setPositiveButton("查看已安装扩展", (d, w) -> startActivity(new Intent(this, PluginActivity.class)))
+                // P1-A：收敛到「扩展」一级目的地（tab=3），不再直跳 PluginActivity 调试入口。
+                .setPositiveButton("查看已安装扩展", (d, w) -> {
+                    tab = NavDestination.EXTENSIONS.id();
+                    show();
+                })
                 .show();
     }
 
@@ -1909,9 +1901,12 @@ public final class MainActivity extends Activity {
         body.addView(Ui.button(this,"任务中心",()->startActivity(new Intent(this,JobsActivity.class)),"查看导入与下载任务"));
         Ui.gap(body,16);
 
-        // 数据与设置：关于文本/版本/许可证留我的；旧「应用插件」转向「扩展」一级目的地，
-        // 本轮不直接跳转 PluginActivity（P1-A 才填真实内容，不做假市场/假插件）。
+        // 数据与设置：关于文本/版本/许可证留我的；旧「应用插件」转向「扩展」一级目的地。
         body.addView(Ui.text(this,"数据与设置",18,Ui.color(this,UiTokens.Role.PRIMARY)));
+        Ui.gap(body,6);
+        // DIR-03：方向是真实用户偏好，入口落在「我的 → 数据与设置」，与 reader/theme 正交。
+        body.addView(Ui.button(this,"外观与阅读偏好",this::showDirectionSettings,
+                "选择外观方向：安静书房、效率工具或内容画廊；只改界面外观，不影响阅读主题"));
         Ui.gap(body,6);
         body.addView(Ui.button(this,"应用插件与扩展",()->{tab=NavDestination.EXTENSIONS.id();show();},"打开扩展（原应用插件入口）"));
         body.addView(Ui.button(this,"第三方许可与声明",this::showThirdPartyLicenses,"查看第三方许可与声明"));
@@ -1946,6 +1941,57 @@ public final class MainActivity extends Activity {
                 + "\n仅在主动打开网址或书源时联网。"
                 + "\n\n无障碍\n支持系统大字体；音量键翻页仅在阅读内容聚焦时生效，控件聚焦时交给系统。"
                 + "\n\n开源许可\nMIT License。完整源代码、构建方式与已知限制见项目 README。", 15, Ui.color(this,UiTokens.Role.SECONDARY)));
+    }
+
+    /**
+     * v4 P1-A / DIR-03：外观方向三选一。只写 openleaf_ui/direction 并重建 chrome；
+     * 阅读主题（reader/theme）、阅读位置、书库搜索/筛选/选中、插件启停都不触碰。
+     */
+    private void showDirectionSettings() {
+        LinearLayout list = Ui.column(this);
+        Ui.pad(list, 16);
+        final int current = UiPrefs.direction(this);
+        final AlertDialog[] dialog = new AlertDialog[1];
+        for (final Direction direction : Direction.values()) {
+            final boolean selected = current == direction.value();
+            Button option = Ui.button(this,
+                    (selected ? "● " : "○ ") + direction.label(),
+                    () -> {
+                        UiPrefs.setDirection(this, direction.value());
+                        if (dialog[0] != null) dialog[0].dismiss();
+                        // 只重建 chrome：tab/query/selection/滚动由 onSaveInstanceState 恢复；
+                        // 插件状态在 openleaf_plugins、阅读位置在各阅读器 prefs，均不受影响。
+                        recreate();
+                    },
+                    "外观方向：" + direction.label() + (selected ? "，当前选中" : "，点按切换"));
+            styleDirectionOption(option, selected);
+            list.addView(option, new LinearLayout.LayoutParams(-1, -2));
+            Ui.gap(list, 8);
+        }
+        list.addView(Ui.text(this,
+                "方向只改变界面外观，不会切换阅读主题，也不会重置阅读位置、搜索词或插件状态。",
+                13, Ui.color(this, UiTokens.Role.SECONDARY)));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list, new ScrollView.LayoutParams(-1, -2));
+        dialog[0] = new AlertDialog.Builder(this).setTitle("外观与阅读偏好 · 方向")
+                .setView(scroll).setNegativeButton("取消", null).create();
+        PluginScreen.show(dialog[0]);
+    }
+
+    /** 方向选项选中态全部取自方向令牌；文字标记 + 读屏说明保证不靠颜色 alone。 */
+    private void styleDirectionOption(Button option, boolean selected) {
+        int bg = Ui.color(this, selected ? UiTokens.Role.ACCENT_SOFT : UiTokens.Role.SURFACE);
+        int fg = Ui.color(this, selected ? UiTokens.Role.ACCENT : UiTokens.Role.PRIMARY);
+        option.setTextColor(fg);
+        option.setMinHeight(Ui.dp(this, 48));
+        option.setMinimumHeight(Ui.dp(this, 48));
+        option.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(fg & 0x18FFFFFF),
+                Ui.shape(bg, UiTokens.radiusDp(UiTokens.Radius.SEGMENT_ITEM), this), null));
+        if (selected) {
+            option.setTypeface(android.graphics.Typeface.create(
+                    UiTokens.fontFamily(UiTokens.Typography.AUX), android.graphics.Typeface.BOLD));
+        }
     }
 
     /** T03：关于页三方许可入口，复用已有 AlertDialog/ScrollView，不新增依赖。 */

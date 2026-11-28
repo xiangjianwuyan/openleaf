@@ -27,7 +27,41 @@ final class PluginScreen {
     static final int EDGE = 0xFFD9E0D6;
     static final int REMOVE = 0xFF87453E;
 
+    // P1-A：真实访问范围/容量边界文案单一真源，安装确认页与扩展详情共用，照抄真实实现。
+    static final String ACCESS_SCOPE =
+            "只读你主动选择的 UTF-8 TXT / MD（最多 1 MiB）。不保留文件授权、不写入、不上传。";
+    static final String DEFAULT_DISABLED =
+            "安装默认禁用，需手动启用后才能运行。";
+    static final String CAPACITY_BOUNDARY =
+            "清单 ≤16 KiB · 最多 20 个 · schema 1 / txt-report · 标题前缀 1–8 · 标题候选 ≤20 · 文本 ≤1 MiB（UTF-8 TXT / MD）";
+
     private PluginScreen() { }
+
+    /** 真实来源对应的开发者口径：内置目录随应用提供；本地 JSON 清单没有开发者字段，不编造。 */
+    static String developer(PluginStore.Source source) {
+        return source == PluginStore.Source.BUILTIN
+                ? "内置目录（随应用提供）" : "本地 JSON（清单未声明开发者）";
+    }
+
+    /** 复用视图：真实访问范围卡（安装确认与扩展详情共用，避免两份文案漂移）。 */
+    static LinearLayout accessCard(Context c) {
+        LinearLayout access = card(c, SOFT);
+        access.addView(heading(c, "访问范围", 16));
+        access.addView(text(c, ACCESS_SCOPE, 14, INK));
+        Ui.gap(access, 6);
+        access.addView(text(c, DEFAULT_DISABLED, 13, MUTED));
+        return access;
+    }
+
+    /** 复用视图：兼容与容量边界卡（当前本地 JSON 引擎的真实上限）。 */
+    static LinearLayout boundaryCard(Context c) {
+        LinearLayout boundary = card(c, SURFACE);
+        boundary.addView(heading(c, "兼容与容量边界", 16));
+        boundary.addView(text(c, CAPACITY_BOUNDARY, 14, INK));
+        Ui.gap(boundary, 6);
+        boundary.addView(text(c, "以上为当前本地 JSON 引擎的真实上限；无在线市场与自动更新。", 13, MUTED));
+        return boundary;
+    }
 
     static void mount(Activity activity, LinearLayout root) {
         Ui.mount(activity, root);

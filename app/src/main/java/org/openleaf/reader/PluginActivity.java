@@ -247,12 +247,8 @@ public final class PluginActivity extends Activity {
         purpose.addView(PluginScreen.text(this, "标题前缀：" + formatPrefixes(manifest.prefixes), 13, PluginScreen.MUTED));
         body.addView(purpose);
         Ui.gap(body, 10);
-        LinearLayout access = PluginScreen.card(this, PluginScreen.SOFT);
-        access.addView(PluginScreen.heading(this, "访问范围", 16));
-        access.addView(PluginScreen.text(this, "只读你主动选择的 UTF-8 TXT / MD（最多 1 MiB）。不保留文件授权、不写入、不上传。", 14, PluginScreen.INK));
-        Ui.gap(access, 6);
-        access.addView(PluginScreen.text(this, "安装默认禁用，需手动启用后才能运行。", 13, PluginScreen.MUTED));
-        body.addView(access);
+        // P1-A：访问范围文案与扩展详情共用同一构建器，保持真实实现单一真源。
+        body.addView(PluginScreen.accessCard(this));
         PluginScreen.show(new AlertDialog.Builder(this).setTitle("确认安装：" + manifest.name)
                 .setView(PluginScreen.dialogBody(this, body))
                 .setNegativeButton("取消", null).setPositiveButton("安装（默认禁用）", (dialog, which) -> {
