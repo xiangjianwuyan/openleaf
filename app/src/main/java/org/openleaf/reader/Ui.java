@@ -44,18 +44,18 @@ final class Ui {
 
     /** v3 主操作：ACCENT 实心 + ON_ACCENT 文字，命中区仍 ≥48dp（A11Y 锚点不变）。 */
     static Button primaryToken(Context c,String label,Runnable onClick,String desc){
-        return tokenButton(c,label,onClick,desc,UiTokens.color(UiTokens.Role.ACCENT),
-                UiTokens.color(UiTokens.Role.ON_ACCENT),UiTokens.radiusDp(UiTokens.Radius.BUTTON));
+        return tokenButton(c,label,onClick,desc,color(c, UiTokens.Role.ACCENT),
+                color(c, UiTokens.Role.ON_ACCENT),UiTokens.radiusDp(UiTokens.Radius.BUTTON));
     }
 
     /** v3 次操作：SURFACE 底 + 1dp DIVIDER 描边 + PRIMARY 文字；描边仅辅助，不靠颜色 alone。 */
     static Button secondaryToken(Context c,String label,Runnable onClick,String desc){
-        Button b=tokenButton(c,label,onClick,desc,UiTokens.color(UiTokens.Role.SURFACE),
-                UiTokens.color(UiTokens.Role.PRIMARY),UiTokens.radiusDp(UiTokens.Radius.BUTTON));
-        GradientDrawable bg=shape(UiTokens.color(UiTokens.Role.SURFACE),UiTokens.radiusDp(UiTokens.Radius.BUTTON),c);
-        bg.setStroke(dp(c,1),UiTokens.color(UiTokens.Role.DIVIDER));
+        Button b=tokenButton(c,label,onClick,desc,color(c, UiTokens.Role.SURFACE),
+                color(c, UiTokens.Role.PRIMARY),UiTokens.radiusDp(UiTokens.Radius.BUTTON));
+        GradientDrawable bg=shape(color(c, UiTokens.Role.SURFACE),UiTokens.radiusDp(UiTokens.Radius.BUTTON),c);
+        bg.setStroke(dp(c,1),color(c, UiTokens.Role.DIVIDER));
         b.setBackground(new RippleDrawable(ColorStateList.valueOf(
-                UiTokens.color(UiTokens.Role.PRIMARY) & 0x18FFFFFF),bg,null));
+                color(c, UiTokens.Role.PRIMARY) & 0x18FFFFFF),bg,null));
         return b;
     }
 
@@ -67,20 +67,20 @@ final class Ui {
         b.setMinHeight(dp(c,48));b.setMinimumHeight(dp(c,48));b.setMinWidth(dp(c,48));b.setMinimumWidth(dp(c,48));
         b.setPadding(dp(c,12),dp(c,6),dp(c,12),dp(c,6));b.setStateListAnimator(null);b.setElevation(0);
         b.setBackground(new RippleDrawable(ColorStateList.valueOf(
-                UiTokens.color(UiTokens.Role.PRIMARY) & 0x18FFFFFF),shape(bg,radiusDp,c),null));
+                color(c, UiTokens.Role.PRIMARY) & 0x18FFFFFF),shape(bg,radiusDp,c),null));
         b.setOnClickListener(v->onClick.run());if(desc!=null)b.setContentDescription(desc);return b;
     }
 
     /** 令牌文字：字级/字体/颜色全部来自 UiTokens。 */
     static TextView tokenText(Context c,String text,UiTokens.Typography t,UiTokens.Role role){
         TextView v=new TextView(c);v.setText(text);v.setTextSize(UiTokens.textSizeSp(t));
-        v.setTextColor(UiTokens.color(role));v.setTypeface(Typeface.create(UiTokens.fontFamily(t),Typeface.NORMAL));
+        v.setTextColor(color(c, role));v.setTypeface(Typeface.create(UiTokens.fontFamily(t),Typeface.NORMAL));
         v.setFontFeatureSettings("kern");return v;
     }
 
     /** 令牌卡片容器：底色/圆角来自 UiTokens。 */
     static LinearLayout tokenCard(Context c,UiTokens.Role bg,UiTokens.Radius radius){
-        LinearLayout l=column(c);l.setBackground(shape(UiTokens.color(bg),UiTokens.radiusDp(radius),c));return l;
+        LinearLayout l=column(c);l.setBackground(shape(color(c, bg),UiTokens.radiusDp(radius),c));return l;
     }
 
     /** 封面占位：左侧 6dp、右侧 12dp 圆角，取自 UiTokens.Radius。 */
