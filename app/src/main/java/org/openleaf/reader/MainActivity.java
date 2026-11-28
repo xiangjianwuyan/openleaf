@@ -12,6 +12,8 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.SystemClock;
+import android.util.Log;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.Gravity;
@@ -650,6 +652,8 @@ public final class MainActivity extends Activity {
         else if (shelfPopulated && libraryScroll != null) shelfScrollY = libraryScroll.getScrollY();
         shelfPopulated = false;
         final long request = ++libraryRequest;
+        // T10：debug 包渲染计时起点；release 包恒为 0，不打日志、不做额外计算。
+        final long perfStart = BuildConfig.DEBUG ? SystemClock.elapsedRealtime() : 0L;
         final String rawFilter = searchKey(query).trim();
         final boolean tagsOnly = rawFilter.startsWith("#");
         final String filter = tagsOnly ? rawFilter.substring(1).trim() : rawFilter;
@@ -723,6 +727,12 @@ public final class MainActivity extends Activity {
                     if (isDestroyed() || request != libraryRequest) return;
                     cardMetadata=metadata;
                     populateShelf(list, folders, books, searching, tagsOnly, filter, tags, resumeBook, resumePosition);
+                    if (BuildConfig.DEBUG && request == libraryRequest) {
+                        Log.d("PERF_SHELF", "request=" + request
+                                + " ms=" + (SystemClock.elapsedRealtime() - perfStart)
+                                + " books=" + books.size() + " page=" + bookPage
+                                + " mode=" + (scrollTop ? "top" : "keep"));
+                    }
                     ScrollView scroll = libraryScroll;
                     if (scroll != null) scroll.post(() -> {
                         if (!isDestroyed() && request == libraryRequest && scroll == libraryScroll) {
