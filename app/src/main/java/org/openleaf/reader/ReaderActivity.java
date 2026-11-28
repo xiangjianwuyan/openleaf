@@ -401,13 +401,13 @@ public final class ReaderActivity extends Activity {
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         toolbar.addView(title, Ui.weight());
-        Button layout = Ui.button(this, "排版", this::openStyleSettings, "排版设置"); toolbar.addView(layout);
-        if (showDirectEdit()) {
-            toolbar.addView(Ui.button(this, "编辑", this::openEditor, "编辑当前文本"));
-        }
-        if (showDirectListen()) {
-            toolbar.addView(Ui.button(this, "听书", this::listenFromCurrentChapter, "从当前章节开始朗读"));
-        }
+        // v4 I2：固定主栏严格为「目录/排版/听书/更多」四项，顺序不随格式能力或插件安装变化。
+        // 编辑是格式相关的低频动作，收进「更多」；扩展动作也只进「更多」，不占主栏第五格。
+        Button tocMain = Ui.button(this, "目录", this::contents, "章节目录");
+        tocMain.setId(R.id.readerToc);
+        toolbar.addView(tocMain);
+        toolbar.addView(Ui.button(this, "排版", this::openStyleSettings, "排版设置"));
+        toolbar.addView(Ui.button(this, "听书", this::listenFromCurrentChapter, "从当前章节开始朗读"));
         Button more = Ui.button(this, "更多", this::openMoreMenu, "更多阅读操作"); toolbar.addView(more);
         more.setOnClickListener(v -> { lastOptionsTrigger = v; openMoreMenu(); });
         root.addView(toolbar);
@@ -487,13 +487,10 @@ public final class ReaderActivity extends Activity {
         previousRead = Ui.button(this, "上一章", () -> turnFromFooter(-1));
         // READ-1：稳定 resource-id，设备自动化按 id 取控件，不依赖随模式变化的文案。
         previousRead.setId(R.id.readerPrevPage);
-        Button tocButton = Ui.button(this, "目录", this::contents);
-        tocButton.setId(R.id.readerToc);
-        tocButton.setContentDescription("章节目录");
         nextRead = Ui.button(this, "下一章", () -> turnFromFooter(1));
         nextRead.setId(R.id.readerNextPage);
+        // 目录已上提到固定主栏，页脚只保留翻章；R.id.readerToc 仍稳定指向主栏目录按钮。
         footer.addView(previousRead, Ui.weight());
-        footer.addView(tocButton, Ui.weight());
         footer.addView(nextRead, Ui.weight());
         refreshPageControls();
         root.addView(footer);
@@ -576,12 +573,6 @@ public final class ReaderActivity extends Activity {
                 android.content.res.ColorStateList.valueOf(0x307A8B7C), Ui.shape(fill, 12, this), null));
     }
 
-    private boolean showDirectEdit() { return supportsPaging() && displayedSource != null; }
-
-    private boolean showDirectListen() {
-        return !showDirectEdit() || getResources().getConfiguration().screenWidthDp >= 420;
-    }
-
     private void listenFromCurrentChapter() {
         Intent intent = new Intent(this, TtsActivity.class)
                 .putExtra(TtsPlaybackService.EXTRA_BOOK_ID, id)
@@ -598,9 +589,11 @@ public final class ReaderActivity extends Activity {
                 && getIntent().getStringExtra("path").toLowerCase(java.util.Locale.ROOT).endsWith(".epub"));
         final ArrayList<String> labels = new ArrayList<>();
         final ArrayList<Runnable> actions = new ArrayList<>();
+        // v4 I2「更多」= 内置区（核心真实能力）+ 扩展区（当前上下文可用插件动作）。
+        // 扩展动作按格式/选区/启用/授权过滤后追加；当前 A 层没有阅读文本插件动作，
+        // 扩展结果为空时不渲染任何扩展分组，只保留下面的内置区，不摆空壳入口。
         labels.add("查找"); actions.add(this::openSearch);
-        if (supportsPaging() && !showDirectEdit()) { labels.add("编辑"); actions.add(this::openEditor); }
-        if (!showDirectListen()) { labels.add("从当前章听书"); actions.add(this::listenFromCurrentChapter); }
+        if (supportsPaging()) { labels.add("编辑"); actions.add(this::openEditor); }
         if (epubBook) { labels.add("图文"); actions.add(this::switchIllustrated); }
         labels.add("标注管理"); actions.add(this::showAnnotations);
         if (isTxt) { labels.add("AI 单章摘要"); actions.add(this::openAiPanel); }
@@ -2591,6 +2584,8 @@ public final class ReaderActivity extends Activity {
         Ui.gap(panel, 8);
 
         // 字体/颜色是独立即时入口，不进草稿；面板内只静态展示当前生效字体与范围。
+        // v4 I2：把即时生效与草稿语义写进界面，避免用户误以为「取消」会撤销字体/资源操作。
+        panel.addView(Ui.text(this, "字体与颜色为即时生效设置，不进草稿；取消排版不会撤销导入字体或下载资源。", 12, Ui.MUTED));
         panel.addView(Ui.text(this, "当前生效字体：" + effectiveFontDescription(), 13, Ui.MUTED));
         panel.addView(Ui.text(this, "设置范围：" + ReaderFonts.describeMode(fonts.mode()), 13, Ui.MUTED));
         if (fonts.mode() == ReaderFonts.MODE_SYSTEM) {
@@ -2614,7 +2609,7 @@ public final class ReaderActivity extends Activity {
         }, "字色"), new LinearLayout.LayoutParams(-1, -2));
         Ui.gap(panel, 8);
 
-        panel.addView(Ui.text(this, "逐项微调（仅刷小样，点应用才生效）", 13, Ui.MUTED));
+        panel.addView(Ui.text(this, "逐项微调（仅刷小样，点应用才生效；取消/返回/点外部关闭均零写入）", 13, Ui.MUTED));
         views.options = new Button[8];
         for (int i = 0; i < views.options.length; i++) {
             final int which = i;

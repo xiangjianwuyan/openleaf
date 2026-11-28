@@ -38,6 +38,7 @@ import android.widget.Toast;
 
 import org.openleaf.reader.core.AudioCapability;
 import org.openleaf.reader.core.Lyrics;
+import org.openleaf.reader.core.MediaSessionIdentity;
 import org.openleaf.reader.core.PlaybackQueue;
 import org.openleaf.reader.core.SpeechText;
 
@@ -589,7 +590,8 @@ public final class AudioPlayerActivity extends Activity {
         labels.add("添加音频文件"); actions.add(this::pickAudio);
         labels.add("下一首播放"); actions.add(this::pickPlayNext);
         labels.add("选择歌词(.lrc/.srt/.txt)"); actions.add(this::pickLyrics);
-        labels.add("停止并退出"); actions.add(this::finish); // 原 desc「停止播放并退出」语义保留
+        labels.add(MediaSessionIdentity.AUDIO.stopLabel() + "并退出");
+        actions.add(this::finish); // 原 desc「停止播放并退出」语义保留，文案点名本地音频对象
         new AlertDialog.Builder(this).setTitle("更多播放操作")
                 .setItems(labels.toArray(new String[0]), (d, which) -> {
                     if (which >= 0 && which < actions.size()) actions.get(which).run();
@@ -600,8 +602,11 @@ public final class AudioPlayerActivity extends Activity {
     private String sleepLabel() {
         String text = sleepView == null ? "" : sleepView.getText().toString();
         String state = text.startsWith("睡眠：") ? text.substring("睡眠：".length()) : text;
-        if (state.isEmpty() || state.contains("关")) return "睡眠定时（关）";
-        return "睡眠定时（" + state + "剩余）";
+        // v4 I2：定时器点名对象，避免与听书（TTS）会话混淆。
+        if (state.isEmpty() || state.contains("关")) {
+            return "睡眠定时（" + MediaSessionIdentity.AUDIO.objectLabel() + "·关）";
+        }
+        return "睡眠定时（" + MediaSessionIdentity.AUDIO.objectLabel() + "·" + state + "剩余）";
     }
 
     /** 更多菜单里的睡眠项：关→15→30→关，仅复用已有 setSleep/cancelSleep，不碰播放器。 */
@@ -1149,7 +1154,8 @@ public final class AudioPlayerActivity extends Activity {
     }
 
     private void setupMediaSession() {
-        mediaSession = new android.media.session.MediaSession(this, "OpenLeafAudio");
+        // v4 I2：媒体会话标签走统一身份键，与视频/TTS 会话区分，面板开合不重建本实例。
+        mediaSession = new android.media.session.MediaSession(this, MediaSessionIdentity.AUDIO.key());
         mediaSession.setCallback(new android.media.session.MediaSession.Callback() {
             @Override public void onPlay() { if (player != null && !player.isPlaying()) { requestFocus(); player.play(); } }
             @Override public void onPause() { if (player != null && player.isPlaying()) player.pause(); }

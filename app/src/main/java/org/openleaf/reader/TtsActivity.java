@@ -12,6 +12,7 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.openleaf.reader.core.MediaSessionIdentity;
 import org.openleaf.reader.core.TextIndexSpec;
 
 import java.io.ByteArrayOutputStream;
@@ -94,7 +95,7 @@ public final class TtsActivity extends Activity implements TtsPlaybackService.Li
                 () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_PREV_CHAPTER)));
         chapterRow.addView(Ui.button(this, "下一章",
                 () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_NEXT_CHAPTER)));
-        chapterRow.addView(Ui.button(this, "停止朗读",
+        chapterRow.addView(Ui.button(this, MediaSessionIdentity.TTS.stopLabel(),
                 () -> TtsPlaybackService.command(this, TtsPlaybackService.ACTION_STOP)));
         root.addView(chapterRow);
 
@@ -111,6 +112,8 @@ public final class TtsActivity extends Activity implements TtsPlaybackService.Li
         root.addView(speedBar, new LinearLayout.LayoutParams(-1, -2));
         root.addView(Ui.text(this, "语速 0.75× — 2×", 12, Ui.MUTED));
 
+        root.addView(Ui.text(this, "定时对象：" + MediaSessionIdentity.TTS.objectLabel()
+                + "（与本地音频是不同会话，互不影响）。", 12, Ui.MUTED));
         LinearLayout sleepRow = Ui.row(this);
         sleepRow.addView(Ui.button(this, "睡眠 15 分", () -> TtsPlaybackService.setSleep(this, 15)));
         sleepRow.addView(Ui.button(this, "睡眠 30 分", () -> TtsPlaybackService.setSleep(this, 30)));
