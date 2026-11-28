@@ -89,12 +89,24 @@
 | AUDIO-01 / AUDIO-02 | T-E | 播控单焦点、停止/暂停语义、会话后台 | ⏳ 待 T-E |
 | VIDEO-01 | T-E | 一条控制 + 音轨字幕面板、取消不重绑 | ⏳ 待 T-E |
 
-## 7. 待确认项（不编造）
+## 7. 续读主卡权威口径（G2 已定稿，2026-11-28）
 
-- **续读主卡数据源待确认（G2），T-B 前补。** `BookStore` 进度 / `ReadingLedger` /
-  `ComicProgressStore` 仅为待核实候选，本文不指定权威源、不定义"可靠记录"阈值。
-  T-B 前未确认则不得用演示数据占位；必要时按架构 §9 建议只交付搜索 + 三态空态 + 导入主次迁移，
-  续读卡单独留到数据源确认后补。
+研究全文：`deliverables/v3-续读数据源-研究.md`（260 行）。**A 阶段已确定，无需真机、无需改 DB、无需新数据源。**
+
+- **唯一权威**：SharedPreferences `"reader"` 中按 `book.id`(UUID) 存的 `opened_` + `progress_/anchor_/epubCfi_/pdf_page_`。
+  - `BookStore` 只做守门：书存在 + 本地 `isFile/canRead` 或 SAF `requirePersistentRead` + 内容 SHA == `books.sha256`；
+  - `ReadingLedger` / `reading_sessions` 只记时长，**不作续读权威**；
+  - `ComicProgressStore` 是按内容指纹的独立 SP 例外；本地音频无逐文件位置，不纳入续读卡；TTS 按文本口径。
+- **"可靠记录"三条全满足才显示续读卡**（否则**不显示**，绝不显示"点开报错"的卡）：
+  1. 最近打开 `opened_<id> > 0`（排序：opened_ 降序、并列 id 升序，取 1 条）；
+  2. 该格式进度键严格有效：TXT `progress_>0` 且锚点可解析 / EPUB spine>0 或 CFI 可解析 / PDF `0<=page<count` / 漫画 `page>0`；
+  3. 书文件可读（BookStore.open() 口径，含 SAF 授权与 SHA 校验）。
+- **现状根因**：main 已有"上次阅读"卡（`MainActivity.java:780,818-839`），显示条件只有 `opened_>0`（`:709,717`），不校验进度/文件——这是"看着有进度但打不开"的来源。v3 在既有路径加闸门，**不另起数据源**；`savedPosition()`（`:841-859`）按格式取位置文案可复用（comic 故意返回 ""）。
+- **降级清单**（全部不显示卡）：旧备份无 FILE 段书、SAF 授权失效、原文件 SHA 变化、CFI 越界、漫画指纹失配、`progress_==0`。位置文案只展示可核对真实值，不展示 0%/估算/章节标题推定值。
+- **T-B 实现建议**：`MainActivity.renderShelf()`（:664-758）沿用 :702-719 取 latest，只对这一本做可靠判定；建议新增纯 JVM `core/ResolvedContinueReading.java`（值对象 + `isReliable()` / `positionText()`，无 Android import）+ core-tests 单测钉死阈值，或放 MainActivity 私有静态方法——口径以本文件为准。不改 DB/扫描/授权/身份规则。
+
+## 7b. 待确认项（不编造）
+
 - Q8（验收人与设备档期）、G3（tab 12 组断言脚本）、G4（取证模板）由 team-lead 在 T-B 前指定。
 
 ## 8. 回退边界
