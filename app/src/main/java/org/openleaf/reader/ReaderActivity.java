@@ -106,6 +106,8 @@ public final class ReaderActivity extends Activity {
     // 0.57.0 P1-2：排版草稿与面板视图引用，生命周期与排版 dialog 完全绑定。
     private StyleDraft styleDraft;
     private StylePanelViews stylePanelViews;
+    // A11Y 焦点回退：记录最近一次打开设置面板的触发控件；面板 dismiss 时按此 View 还焦点。
+    private View lastOptionsTrigger;
     /** 排版面板内可变的视图引用；只用于刷新文案与小样，dismiss 时整组清空。 */
     private static final class StylePanelViews {
         TextView preview;
@@ -407,6 +409,7 @@ public final class ReaderActivity extends Activity {
             toolbar.addView(Ui.button(this, "听书", this::listenFromCurrentChapter, "从当前章节开始朗读"));
         }
         Button more = Ui.button(this, "更多", this::openMoreMenu, "更多阅读操作"); toolbar.addView(more);
+        more.setOnClickListener(v -> { lastOptionsTrigger = v; openMoreMenu(); });
         root.addView(toolbar);
         chapterLabel = Ui.text(this, "", 13, Ui.MUTED);
         chapterLabel.setPadding(Ui.dp(this, 24), Ui.dp(this, 8), Ui.dp(this, 24), Ui.dp(this, 8));
@@ -2877,9 +2880,15 @@ public final class ReaderActivity extends Activity {
         Ui.pad(panel, 14);
         panel.setBackgroundColor(Color.rgb(247, 243, 234));
         panel.addView(Ui.text(this, "按阅读任务分组；每项显示当前值，打开或关闭不会改变正文锚点。", 14, Ui.MUTED));
-        panel.addView(settingsItemButton("可视选项  ·  字体、字号、主题", this::visualSettings, "可视选项"));
-        panel.addView(settingsItemButton("控制选项  ·  翻页、动画、手势", this::controlSettings, "控制选项"));
-        panel.addView(settingsItemButton("文本与网络  ·  编码、重排、预取", this::textSettings, "文本与网络"));
+        Button visualEntry = settingsItemButton("可视选项  ·  字体、字号、主题", this::visualSettings, "可视选项");
+        visualEntry.setOnClickListener(v -> { lastOptionsTrigger = v; visualSettings(); });
+        panel.addView(visualEntry);
+        Button controlEntry = settingsItemButton("控制选项  ·  翻页、动画、手势", this::controlSettings, "控制选项");
+        controlEntry.setOnClickListener(v -> { lastOptionsTrigger = v; controlSettings(); });
+        panel.addView(controlEntry);
+        Button textEntry = settingsItemButton("文本与网络  ·  编码、重排、预取", this::textSettings, "文本与网络");
+        textEntry.setOnClickListener(v -> { lastOptionsTrigger = v; textSettings(); });
+        panel.addView(textEntry);
         showReaderOptions("阅读设置", panel);
     }
 
@@ -3002,6 +3011,7 @@ public final class ReaderActivity extends Activity {
     }
 
     private void showReaderOptions(String title, LinearLayout panel) {
+        final View returnTo = lastOptionsTrigger; // 面板创建时快照，避免嵌套层覆盖字段
         panel.setBackgroundColor(Color.rgb(247, 243, 234));
         panel.setPadding(Ui.dp(this, 14), Ui.dp(this, 8), Ui.dp(this, 14), Ui.dp(this, 14));
         ScrollView settingsScroll = new ScrollView(this);
@@ -3018,8 +3028,7 @@ public final class ReaderActivity extends Activity {
         // A11Y-1: 系统 NegativeButton 无原生 desc 入口，show() 之后取到实际 Button 再补语义。
         Button closeButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
         if (closeButton != null) closeButton.setContentDescription("关闭" + title + "面板");
-        // 焦点回退需设备确认：showReaderOptions 的上游触发者可能是另一个对话框按钮，
-        // 没有稳定可复用的触发视图，故不冒然加 setOnDismissListener 抢焦点。
+        dialog.setOnDismissListener(d -> ReaderReturnFocus.restore(returnTo));
     }
 
     /** 沉浸式阅读：用 alpha 淡出工具栏/底栏，不改变布局尺寸（零回归）。 */
