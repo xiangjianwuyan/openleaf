@@ -322,7 +322,7 @@ public final class BookParserTest {
     private static void malformedXhtml() throws Exception {
         Map<String, byte[]> entries = base();
         entries.put("OPS/chapter.xhtml", bytes("<html><body><p>unclosed</body></html>"));
-        expectFailure("XML 解析失败", () -> parseZip(entries));
+        equal("unclosed", parseZip(entries).chapters.get(0).text.trim());
     }
 
     private static void xmlDepth() throws Exception {

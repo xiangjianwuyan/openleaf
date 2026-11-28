@@ -252,7 +252,7 @@ public final class EpubChapterIndexerTest {
         expectIndexFailure(epub(spineEntries("XXE",
                 "<?xml version='1.0'?><!DOCTYPE html [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]>"
                         + "<html><body><p>&xxe;</p></body></html>")), null);
-        expectIndexFailure(epub(spineEntries("Broken", "<html><body><p>unclosed</body></html>")), null);
+        expectIndexFailure(epub(spineEntries("Broken", "<html><body><p title='unterminated>text</p></body></html>")), "标签未闭合");
         passed++;
     }
 

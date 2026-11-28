@@ -35,12 +35,20 @@ public final class EpubActivity extends Activity {
     private Button previous, next, toc;
     private String id;
     private int chapter, scrollY, generation, theme, font;
+    private int pageIndex, pageCount = 1;
+    private boolean paged, turning, restoreAtEnd;
+    private float touchX, touchY;
+    private long touchTime;
+    private boolean multiTouch;
+    private LinearLayout footer;
     // 0.30.0 #2：有效配色（自定义优先，0 = 未设置回退预设）。
     private int paperColor, inkColor;
     private boolean bookCss; // 是否套用原书 CSS（安全白名单内联）
     private String savedCfi; // CFI 主锚点；scrollY 作为回退
     private String[] titles;
-    private String fragment;
+    private String fragment, pageError;
+    private int cfiPage = -1;
+    private int lastIntent = -1;
     private volatile Page currentPage;
     private static final class Page {
         final String url;
@@ -68,12 +76,15 @@ public final class EpubActivity extends Activity {
         font = Math.max(14, Math.min(32, prefs.getInt("fontSize", 20)));
         bookCss = prefs.getBoolean("epubBookCss_" + id, true); // 默认保留原书样式
         savedCfi = prefs.getString("epubCfi_" + id, "");
+        paged = prefs.getBoolean("epub_paged", true);
+        pageIndex = Math.max(0, prefs.getInt("epub_page_" + id, 0));
         if (state != null) {
             chapter = state.getInt("chapter", chapter); scrollY = state.getInt("scroll", scrollY);
             savedCfi = state.getString("cfi", savedCfi);
+            pageIndex = state.getInt("page", pageIndex);
         } else {
             int requested = getIntent().getIntExtra("epubTargetSpine", -1);
-            if (requested >= 0 && requested != chapter) { chapter = requested; scrollY = 0; savedCfi = ""; }
+            if (requested >= 0 && requested != chapter) { chapter = requested; scrollY = 0; pageIndex = 0; savedCfi = ""; }
         }
         try { build(); } catch (RuntimeException unavailable) {
             new AlertDialog.Builder(this).setMessage("系统 WebView 不可用。")
@@ -112,6 +123,20 @@ public final class EpubActivity extends Activity {
     private void build() {
         LinearLayout root = Ui.column(this);
         Ui.mount(this, root);
+        // One inset owner: Android 15 edge-to-edge and older navigation modes both reserve real space.
+        root.setFitsSystemWindows(false);
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets safe = insets.getInsets(android.view.WindowInsets.Type.systemBars()
+                        | android.view.WindowInsets.Type.displayCutout());
+                view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+                return android.view.WindowInsets.CONSUMED;
+            }
+            view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
+                    insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            return insets.consumeSystemWindowInsets();
+        });
+        root.requestApplyInsets();
         LinearLayout top = Ui.row(this);
         Button back = Ui.button(this, "返回", this::finish); back.setContentDescription("返回书架"); top.addView(back);
         TextView title = Ui.title(this, getIntent().getStringExtra("title"), 16);
@@ -121,15 +146,32 @@ public final class EpubActivity extends Activity {
         Button settingsButton = Ui.button(this, "设置", this::settings); settingsButton.setContentDescription("阅读设置"); top.addView(settingsButton);
         root.addView(top);
         label = Ui.text(this, "正在打开 EPUB…", 13, Ui.GREEN);
-        label.setMaxLines(2); Ui.pad(label, 8); root.addView(label);
-        // 外部 CSS 三态常驻展示（不用 Toast 充数）；未导入过显示 §12 未导入态
+        label.setSingleLine(); label.setEllipsize(TextUtils.TruncateAt.END); Ui.pad(label, 8); root.addView(label);
         cssStatus = Ui.text(this, ExternalCssStore.lastStatus() == null
                 ? "未导入外部样式（当前使用原书样式 / 应用统一样式）" : ExternalCssStore.lastStatus(), 12, Ui.MUTED);
-        cssStatus.setMaxLines(2); Ui.pad(cssStatus, 8); root.addView(cssStatus);
+        cssStatus.setMaxLines(2); Ui.pad(cssStatus, 8); cssStatus.setVisibility(android.view.View.GONE); root.addView(cssStatus);
         themeStatus = Ui.text(this, "", 12, Ui.MUTED);
-        themeStatus.setMaxLines(2); Ui.pad(themeStatus, 8); root.addView(themeStatus);
+        themeStatus.setMaxLines(2); Ui.pad(themeStatus, 8); themeStatus.setVisibility(android.view.View.GONE); root.addView(themeStatus);
         web = new WebView(this);
         web.setSaveEnabled(false);
+        web.setOverScrollMode(android.view.View.OVER_SCROLL_NEVER);
+        web.setHorizontalScrollBarEnabled(false);
+        web.setOnTouchListener((view, event) -> {
+            int action = event.getActionMasked();
+            if (action == android.view.MotionEvent.ACTION_DOWN) {
+                touchX = event.getX(); touchY = event.getY(); touchTime = event.getEventTime(); multiTouch = false;
+            } else if (action == android.view.MotionEvent.ACTION_POINTER_DOWN) multiTouch = true;
+            else if (action == android.view.MotionEvent.ACTION_UP && paged && !multiTouch) {
+                float dx = event.getX() - touchX, dy = event.getY() - touchY;
+                if (event.getEventTime() - touchTime < 700 && Math.abs(dx) > Ui.dp(this, 48)
+                        && Math.abs(dx) > Math.abs(dy) * 1.4f) {
+                    android.view.MotionEvent cancel = android.view.MotionEvent.obtain(event);
+                    cancel.setAction(android.view.MotionEvent.ACTION_CANCEL); web.onTouchEvent(cancel); cancel.recycle();
+                    turnPage(dx < 0 ? 1 : -1); return true;
+                }
+            }
+            return false;
+        });
         web.setBackgroundColor(paperColor);
         // 仅用于我们注入的 CFI 定位脚本；书内 script 已被 BookParser 剥离，
         // 且 CSP default-src 'none' 阻止任何外部/内联脚本，页面内容仍不可执行脚本。
@@ -141,6 +183,10 @@ public final class EpubActivity extends Activity {
         web.getSettings().setDomStorageEnabled(false);
         web.getSettings().setBuiltInZoomControls(true);
         web.getSettings().setDisplayZoomControls(false);
+        // Without a wide viewport the layout viewport (CSS px) disagrees with window.innerHeight,
+        // so paged content overflows by one line and the footer clips the last line.
+        web.getSettings().setUseWideViewPort(true);
+        web.getSettings().setLoadWithOverviewMode(true);
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
@@ -184,26 +230,33 @@ public final class EpubActivity extends Activity {
                 view.postVisualStateCallback(generation, new WebView.VisualStateCallback() {
                     @Override public void onComplete(long token) {
                         if (web != view || token != myGeneration || currentPage != page) return;
-                        // 双锚点：优先 CFI 结构定位，失败/无 CFI 时用 scrollY 回退
-                        restoreByCfi(view, savedCfi, target, () -> {
+                        view.evaluateJavascript(EpubPageLayout.bootstrap(paged), ignored -> {
                             if (web != view || myGeneration != generation || currentPage != page) return;
-                            pageReady = true;
-                            updateNavigation();
+                            restoreByCfi(view, savedCfi, target, () -> {
+                                if (web != view || myGeneration != generation || currentPage != page) return;
+                                pageReady = true; turning = false;
+                                updateNavigation();
+                                // Only persist once the intended page was reached, otherwise a failed
+                                // first paint would overwrite the good anchor with page one.
+                                if (!paged || lastIntent <= 0 || pageIndex == lastIntent) save();
+                                repaintRestoredPage(view, page);
+                                dumpQaMetrics(view);
+                            });
                         });
                     }
                 });
             }
         });
         root.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
-        LinearLayout bar = Ui.row(this);
-        previous = Ui.button(this, "上一章", () -> load(chapter - 1, 0));
-        next = Ui.button(this, "下一章", () -> load(chapter + 1, 0));
+        footer = Ui.row(this);
+        previous = Ui.button(this, "上一页", () -> turnPage(-1));
+        next = Ui.button(this, "下一页", () -> turnPage(1));
         toc = Ui.button(this, "目录", this::contents);
-        previous.setContentDescription("上一章"); next.setContentDescription("下一章"); toc.setContentDescription("章节目录");
-        bar.addView(previous, Ui.weight()); bar.addView(toc, Ui.weight()); bar.addView(next, Ui.weight());
+        toc.setContentDescription("章节目录");
+        footer.addView(previous, Ui.weight()); footer.addView(toc, Ui.weight()); footer.addView(next, Ui.weight());
         Button plain = Ui.button(this, "纯文字", this::plain); plain.setContentDescription("切换纯文字模式");
-        bar.addView(plain, Ui.weight());
-        root.addView(bar);
+        footer.addView(plain, Ui.weight());
+        root.addView(footer);
         updateNavigation();
     }
 
@@ -248,22 +301,108 @@ public final class EpubActivity extends Activity {
     }
 
     private void updateNavigation() {
-        boolean available = titles != null;
-        previous.setEnabled(available && chapter > 0);
-        next.setEnabled(available && chapter + 1 < titles.length);
-        toc.setEnabled(available);
+        boolean available = titles != null && pageReady && !turning;
+        previous.setText(paged ? "上一页" : "上一章"); next.setText(paged ? "下一页" : "下一章");
+        previous.setContentDescription(paged ? "上一页" : "上一章");
+        next.setContentDescription(paged ? "下一页" : "下一章");
+        previous.setEnabled(available && (chapter > 0 || (paged && pageIndex > 0)));
+        next.setEnabled(available && (chapter + 1 < titles.length || (paged && pageIndex + 1 < pageCount)));
+        toc.setEnabled(titles != null);
+        if (pageError != null) label.setText(pageError);
+        else if (titles != null) label.setText((chapter + 1) + " / " + titles.length
+                + (paged && pageReady ? " · " + (pageIndex + 1) + "/" + pageCount + " 页" : "") + " · " + titles[chapter]);
     }
 
-    /** 用当前样式设置重新渲染本章（保留位置锚点）。 */
+    private void turnPage(int direction) {
+        if (!pageReady || turning || titles == null || web == null) return;
+        if (!paged) { load(chapter + direction, 0); return; }
+        int target = pageIndex + direction;
+        if (target < 0 || target >= pageCount) {
+            load(chapter + direction, direction < 0 ? -1 : 0); return;
+        }
+        turning = true; updateNavigation();
+        Page expected = currentPage;
+        web.evaluateJavascript("window.__openleafReader.go(" + target + ")", value -> {
+            if (expected != currentPage || web == null) return;
+            readPageMetrics(value); turning = false; updateNavigation(); save();
+        });
+    }
+
+    /** Debug-only layout probe used by device QA; never runs unless the caller opts in. */
+    private void dumpQaMetrics(WebView view) {
+        if (!BuildConfig.DEBUG || !getIntent().getBooleanExtra("qaMetrics", false)) return;
+        String js = "({innerH:innerHeight,innerW:innerWidth,"
+                + "contentH:document.getElementById('epub-content').clientHeight,"
+                + "contentScrollW:document.getElementById('epub-content').scrollWidth,"
+                + "bodyH:document.body.clientHeight,docH:document.documentElement.clientHeight,"
+                + "lh:getComputedStyle(document.getElementById('epub-content')).lineHeight,"
+                + "scrollX:window.scrollX,scrollY:window.scrollY,page:%d,"
+                + "cap:(window.__openleafReader?window.__openleafReader.capture():null),"
+                + "probeScroll:(function(){try{window.scrollTo(4000,0);var a=window.scrollX;"
+                + "var b=document.scrollingElement?document.scrollingElement.scrollLeft:-1;"
+                + "window.scrollTo(0,0);return [a,b];}catch(e){return 'ERR';}})()})";
+        view.evaluateJavascript(String.format(Locale.ROOT, js, pageIndex), value -> {
+            try {
+                android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
+                String javaSide = String.format(Locale.ROOT,
+                        "\"webW\":%d,\"webH\":%d,\"density\":%s,\"scaledDensity\":%s,\"screenH\":%d,\"screenW\":%d",
+                        web.getWidth(), web.getHeight(), metrics.density, metrics.scaledDensity,
+                        metrics.heightPixels, metrics.widthPixels);
+                String merged = value == null ? "{}" : value.replaceFirst("\\}$", "," + javaSide + "}");
+                java.nio.file.Files.write(new java.io.File(getFilesDir(), "qa-metrics.json").toPath(),
+                        merged.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            } catch (Exception ignored) { }
+        });
+    }
+
+    /** Debug-only trace of what each save captured; used by device QA. */
+    private void dumpQaSave(String cfi, int spine) {
+        if (!BuildConfig.DEBUG || !getIntent().getBooleanExtra("qaMetrics", false)) return;
+        String line = "page=" + pageIndex + " spine=" + spine + " cfi=" + cfi + "\n";
+        try {
+            java.nio.file.Files.write(new java.io.File(getFilesDir(), "qa-save.json").toPath(), line.getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8),
+                    java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+        } catch (Exception ignored) { }
+    }
+
+    private void dumpQaRestore(String line) {
+        if (!BuildConfig.DEBUG || !getIntent().getBooleanExtra("qaMetrics", false)) return;
+        try {
+            java.nio.file.Files.write(new java.io.File(getFilesDir(), "qa-restore.txt").toPath(),
+                    (line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+        } catch (Exception ignored) { }
+    }
+
+    private void readPageMetrics(String value) {        try {
+            org.json.JSONArray metrics = new org.json.JSONArray(value);
+            pageCount = Math.max(1, metrics.getInt(1));
+            pageIndex = Math.max(0, Math.min(pageCount - 1, metrics.getInt(0)));
+        } catch (Exception ignored) { pageIndex = 0; pageCount = 1; }
+    }
+
+    /** Reflow only after the visible text anchor has been captured. */
     private void reloadCurrent() {
-        captureCfi(view -> { savedCfi = view == null ? "" : view; load(chapter, scrollY); });
+        turning = true; updateNavigation();
+        Page expected = currentPage;
+        captureCfi(cfi -> {
+            if (expected != currentPage || web == null) return;
+            if (cfi != null && !cfi.isEmpty()) savedCfi = cfi;
+            scrollY = web.getScrollY();
+            load(chapter, scrollY);
+        });
     }
 
     private void load(int target, int offset) {
         if (titles == null || target < 0 || target >= titles.length) return;
         save();
-        chapter = target; scrollY = offset; pageReady = false; currentPage = null;
-        fragment = null;
+        if (target != chapter) { savedCfi = ""; pageIndex = 0; }
+        restoreAtEnd = offset < 0;
+        chapter = target; scrollY = Math.max(0, offset); pageReady = false; turning = false; currentPage = null;
+        prefs.edit().putInt("epub_chapter_" + id, chapter).putInt("epub_scroll_" + id, scrollY)
+                .putInt("epub_page_" + id, pageIndex).putString("epubCfi_" + id, savedCfi).apply();
+        fragment = null; pageError = null;
         int request = ++generation;
         label.setText((chapter + 1) + " / " + titles.length + " · " + titles[chapter]);
         updateNavigation();
@@ -284,7 +423,8 @@ public final class EpubActivity extends Activity {
             } catch (Exception error) {
                 runOnUiThread(() -> {
                     if (web == null || isDestroyed() || request != generation) return;
-                    label.setText("此章无法显示，可切换纯文字。" + message(error));
+                    pageError = "此章无法显示，可切换纯文字。" + message(error);
+                    label.setText(pageError);
                     fragment = "<p>此章无法显示。</p>";
                     render();
                 });
@@ -306,11 +446,16 @@ public final class EpubActivity extends Activity {
                 + "a.epub-illustration:focus-visible{outline:2px solid currentColor}"
                 + "figcaption{font-size:.85em;text-align:center}blockquote{margin-inline:1em;padding-inline-start:.7em;border-inline-start:2px solid " + border + "}"
                 + "pre{white-space:pre-wrap}table{border-collapse:collapse;display:block;overflow:auto}td,th{padding:.35em;border:1px solid " + border + "}";
+        css += EpubPageLayout.css(paged);
+        web.getSettings().setBuiltInZoomControls(!paged);
+        web.setVerticalScrollBarEnabled(!paged);
         web.setBackgroundColor(paperColor);
+        String viewport = "width=device-width,initial-scale=1,maximum-scale=1"
+                + (paged ? ",user-scalable=no" : "");
         currentPage = new Page(url, "<!doctype html><html><head><meta charset=utf-8>"
-                + "<meta name=viewport content='width=device-width,initial-scale=1'>"
+                + "<meta name=viewport content='" + viewport + "'>"
                 + "<meta http-equiv=Content-Security-Policy content=\"default-src 'none'; img-src https://epub.openleaf.invalid; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\">"
-                + "<style>" + css + "</style></head><body>" + fragment + "</body></html>");
+                + "<style>" + css + "</style></head><body><main id=epub-content>" + fragment + "</main></body></html>");
         web.loadUrl(url);
     }
 
@@ -326,7 +471,9 @@ public final class EpubActivity extends Activity {
     private static String message(Exception e) { return e.getMessage() == null ? "" : " " + e.getMessage(); }
     private void contents() {
         if (titles != null) new AlertDialog.Builder(this).setTitle("目录")
-                .setSingleChoiceItems(titles, chapter, (d, which) -> { d.dismiss(); load(which, 0); })
+                .setSingleChoiceItems(titles, chapter, (d, which) -> {
+                    d.dismiss(); savedCfi = ""; pageIndex = 0; load(which, 0);
+                })
                 .setNegativeButton("关闭", null).show();
     }
     private void settings() {
@@ -336,12 +483,17 @@ public final class EpubActivity extends Activity {
                 : "跟随系统：关（当前：" + themeName() + "）";
         new AlertDialog.Builder(this).setTitle("阅读设置").setItems(new String[]{
                 "减小字号", "增大字号", "切换主题", "原书样式：" + (bookCss ? "开" : "关") + "（点击切换）",
-                "纯文字与书内查找", "样式与位置说明", "外部样式…", followLabel}, (d, which) -> {
+                "纯文字与书内查找", "样式、位置与翻页方式", "外部样式…", followLabel}, (d, which) -> {
             if (which == 4) { plain(); return; }
             if (which == 5) {
-                new AlertDialog.Builder(this).setTitle("样式与位置说明")
-                        .setMessage("原书样式：开=套用原书 CSS 中的安全样式（仅文字对齐、间距、行高等白名单声明，忽略颜色与脚本）；关=由应用统一排版。字号、主题始终由应用控制。\n\n阅读位置以 CFI 结构锚点为主、滚动偏移为回退，切换纯文字/图文或原书样式后可回到相近位置。")
-                        .setPositiveButton("知道了", null).show();
+                new AlertDialog.Builder(this).setTitle("样式、位置与翻页方式")
+                        .setMessage("左右分页：左右划动或使用底部按钮逐页阅读，章节结尾会自动换章。上下滚动：自由滚动正文，底栏用于换章。\n\n原书样式：保留原书的对齐、间距与行高；关闭后使用统一排版。字号和主题始终由应用控制。\n\n调整排版后会尽量保持当前文字位置。\n\n" + cssStatus.getText())
+                        .setPositiveButton("知道了", null)
+                        .setNeutralButton(paged ? "改用上下滚动" : "改用左右分页", (dialog, button) -> {
+                            paged = !paged;
+                            prefs.edit().putBoolean("epub_paged", paged).apply();
+                            reloadCurrent();
+                        }).show();
                 return;
             }
             if (which == 6) { externalCssMenu(); return; }
@@ -367,7 +519,7 @@ public final class EpubActivity extends Activity {
             SharedPreferences.Editor editor = prefs.edit().putInt("theme", theme).putInt("fontSize", font);
             if (manualTheme) editor.putBoolean(ThemeResolver.KEY_FOLLOW, false); // 手动切换自动关跟随
             editor.apply();
-            render();
+            reloadCurrent();
         }).show();
     }
 
@@ -384,7 +536,7 @@ public final class EpubActivity extends Activity {
         theme = next;
         refreshPalette();
         if (web != null) web.setBackgroundColor(paperColor);
-        if (fragment != null) render();
+        if (fragment != null) reloadCurrent();
     }
 
     private String cssImportedStatus() {
@@ -450,28 +602,38 @@ public final class EpubActivity extends Activity {
     private void save() {
         if (!pageReady || web == null || prefs == null) return;
         scrollY = web.getScrollY();
-        prefs.edit().putInt("epub_chapter_" + id, chapter).putInt("epub_scroll_" + id, scrollY).apply();
-        // CFI 主锚点：异步从当前可见元素采集（不阻塞翻页/暂停）
+        final Page expected = currentPage;
+        final int spine = chapter;
+        prefs.edit().putInt("epub_chapter_" + id, spine).putInt("epub_scroll_" + id, scrollY)
+                .putInt("epub_page_" + id, pageIndex).apply();
         captureCfi(cfi -> {
-            savedCfi = cfi == null ? "" : cfi;
-            prefs.edit().putString("epubCfi_" + id, savedCfi).apply();
+            if (expected != currentPage || spine != chapter) return;
+            if (cfi == null || cfi.isEmpty()) {
+                // Never keep an anchor that belongs to another page: it would outrank the saved page.
+                if (cfiPage == pageIndex) { savedCfi = ""; cfiPage = -1; }
+                dumpQaSave("empty", spine);
+                return;
+            }
+            savedCfi = cfi;
+            prefs.edit().putString("epubCfi_" + id, cfi).apply();
+            dumpQaSave(cfi, spine);
         });
     }
 
-    /** 注入脚本：取屏幕顶部最近的 data-cfi 元素，拼成 CFI（spine + 结构路径 + 0 偏移）。 */
+    /** Capture visible text, including offsets inside paragraphs split across pages. */
     private void captureCfi(java.util.function.Consumer<String> callback) {
         if (web == null || !pageReady) { callback.accept(""); return; }
-        String js = "(function(){"
-                + "var y=window.scrollY||document.documentElement.scrollTop||0;"
-                + "var els=document.querySelectorAll('[data-cfi]');var best='',bestTop=-1e9;"
-                + "for(var i=0;i<els.length;i++){var r=els[i].getBoundingClientRect();var t=r.top+y;"
-                + "if(t<=y+8&&t>bestTop){bestTop=t;best=els[i].getAttribute('data-cfi');}}"
-                + "return best||'';})()";
+        final Page expected = currentPage;
+        final int spine = chapter;
         try {
-            web.evaluateJavascript(js, value -> {
-                String path = value == null ? "" : value.replace("\"", "");
-                if (path.isEmpty() || "null".equals(path)) { callback.accept(""); return; }
-                callback.accept(org.openleaf.reader.core.EpubCfi.create(chapter, parsePath(path), 0));
+            web.evaluateJavascript("window.__openleafReader ? window.__openleafReader.capture() : null", value -> {
+                if (expected != currentPage || spine != chapter) { callback.accept(""); return; }
+                try {
+                    org.json.JSONObject anchor = new org.json.JSONObject(value);
+                    callback.accept(org.openleaf.reader.core.EpubCfi.create(spine,
+                            parsePath(anchor.getString("path")), anchor.optInt("offset", 0)));
+                    if (spine == chapter) cfiPage = pageIndex;
+                } catch (Exception invalid) { callback.accept(""); }
             });
         } catch (Exception ignored) { callback.accept(""); }
     }
@@ -488,27 +650,73 @@ public final class EpubActivity extends Activity {
         return result;
     }
 
-    /** 双锚点恢复：按 CFI 找到元素滚动到顶部；失败/无 CFI 时回退到 scrollY。 */
     private void restoreByCfi(WebView view, String cfi, int fallbackScroll, Runnable onDone) {
         org.openleaf.reader.core.EpubCfi.Location loc = org.openleaf.reader.core.EpubCfi.parse(cfi);
-        if (loc == null || loc.spineIndex != chapter || loc.path.length == 0) {
-            view.scrollTo(0, fallbackScroll);
+        boolean valid = loc != null && loc.spineIndex == chapter && loc.path.length > 0;
+        String path = valid ? loc.pathString() : "";
+        int offset = valid ? loc.offset : 0;
+        final Page expected = currentPage;
+        final int intended = paged ? pageIndex : 0;
+        lastIntent = intended;
+        dumpQaRestore("restore path=" + path + " offset=" + offset + " intended=" + intended
+                + " fallback=" + fallbackScroll + " end=" + restoreAtEnd + " cfi=" + cfi);
+        String js = "window.__openleafReader.restore(\"" + path + "\"," + offset + ","
+                + (paged ? pageIndex : Math.round(fallbackScroll / getResources().getDisplayMetrics().density))
+                + "," + restoreAtEnd + ")";
+        try {
+            view.evaluateJavascript(js, value -> {
+                if (expected != currentPage || web != view) return;
+                readPageMetrics(value); restoreAtEnd = false;
+                retryRestore(view, expected, intended, 1, onDone);
+            });
+        } catch (Exception ignored) {
+            if (!paged) view.scrollTo(0, fallbackScroll);
+            restoreAtEnd = false; onDone.run();
+        }
+    }
+
+    /**
+     * The first paint can clamp scrollTo before the horizontal range exists, so verify and retry
+     * a few times with a growing delay instead of silently reopening at page one.
+     */
+    /**
+     * The load-time scroll updates scrollX but the first composited frame can still show page one.
+     * Re-applying the same offset after a frame (the same path the pager buttons use) repaints it.
+     */
+    private void repaintRestoredPage(WebView view, Page expected) {
+        if (!paged || pageIndex <= 0) return;
+        final int page = pageIndex;
+        view.postDelayed(() -> {
+            if (web != view || expected != currentPage) return;
+            view.evaluateJavascript("window.__openleafReader.go(" + page + ")", value -> {
+                if (web != view || expected != currentPage) return;
+                readPageMetrics(value);
+            });
+        }, 240L);
+    }
+
+    private void retryRestore(WebView view, Page expected, int intended, int attempt, Runnable onDone) {
+        dumpQaRestore("verify attempt=" + attempt + " intended=" + intended + " actual=" + pageIndex
+                + " scrollX=" + (paged ? pageIndex : -1));
+        if (!paged || intended <= 0 || pageIndex == intended) {
+            // A programmatic scroll during the load can update scrollX without repainting the
+            // column; one 1px round trip forces the compositor to redraw at the restored offset.
+            if (paged && intended > 0 && pageIndex == intended) {
+                view.evaluateJavascript("window.scrollBy(1,0);window.scrollBy(-1,0);null", null);
+                view.invalidate();
+            }
             onDone.run();
             return;
         }
-        final String path = loc.pathString();
-        // 用 CSS.escape 不存在时按构造来源（纯数字与 /）安全拼接
-        String js = "(function(){var e=document.querySelector('[data-cfi=\"" + path + "\"]');"
-                + "if(!e)return '0';e.scrollIntoView({block:'start'});return '1';})()";
-        try {
-            web.evaluateJavascript(js, value -> {
-                if (value == null || !value.contains("1")) view.scrollTo(0, fallbackScroll);
-                onDone.run();
+        if (attempt > 3) { onDone.run(); return; }
+        view.postDelayed(() -> {
+            if (expected != currentPage || web != view) return;
+            view.evaluateJavascript("window.__openleafReader.go(" + intended + ")", value -> {
+                if (expected != currentPage || web != view) return;
+                readPageMetrics(value);
+                retryRestore(view, expected, intended, attempt + 1, onDone);
             });
-        } catch (Exception ignored) {
-            view.scrollTo(0, fallbackScroll);
-            onDone.run();
-        }
+        }, 180L * attempt);
     }
     @Override protected void onResume() {
         super.onResume();
@@ -517,7 +725,10 @@ public final class EpubActivity extends Activity {
     }
     @Override protected void onPause() { save(); super.onPause(); }
     @Override protected void onSaveInstanceState(Bundle state) {
-        save(); state.putInt("chapter", chapter); state.putInt("scroll", scrollY); state.putString("cfi", savedCfi);
+        save(); state.putInt("chapter", chapter); state.putInt("scroll", scrollY);
+        // A CFI captured on an older page must not override the newer page number after rotation.
+        state.putString("cfi", cfiPage == pageIndex ? savedCfi : "");
+        state.putInt("page", pageIndex);
         super.onSaveInstanceState(state);
     }
     @Override protected void onDestroy() {

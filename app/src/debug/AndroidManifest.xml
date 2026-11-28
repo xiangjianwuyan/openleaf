@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <!-- Debug-only QA entry: instrumentation cannot start activities on the Android 17 test device. -->
+        <activity android:name=".EpubQaBootstrapActivity" android:exported="true" />
         <provider android:name=".BulkFixtureProvider" android:authorities="${applicationId}.debugfixtures" android:exported="true" android:permission="android.permission.MANAGE_DOCUMENTS" android:grantUriPermissions="true">
             <intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER" /></intent-filter>
         </provider>
@@ -16,4 +18,5 @@
     <instrumentation android:name="org.openleaf.reader.BackupRoundtripInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
     <instrumentation android:name="org.openleaf.reader.OnlineUpdateInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
     <instrumentation android:name="org.openleaf.reader.IndexCrossEntryInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <instrumentation android:name="org.openleaf.reader.EpubReaderInstrumentation" android:targetPackage="${applicationId}" android:functionalTest="true" />
 </manifest>

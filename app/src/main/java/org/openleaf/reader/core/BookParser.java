@@ -33,6 +33,7 @@ import javax.xml.parsers.SAXParserFactory;
 import org.xml.sax.Attributes;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
+import org.xml.sax.SAXParseException;
 import org.xml.sax.XMLReader;
 import org.xml.sax.helpers.DefaultHandler;
 
@@ -71,7 +72,11 @@ public final class BookParser {
             + "(['\"])https?://www\\.daisy\\.org/z3986/2005/ncx-2005-1\\.dtd\\2\\s*>",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern HTML_ENTITY = Pattern.compile("&([A-Za-z][A-Za-z0-9]+);");
-    private static final Pattern VOID_ELEMENT = Pattern.compile("(?i)<(br|hr|img|meta|link|input)(?=[\\s/>])([^>]*?)(?<!/)>");
+    private static final Set<String> HTML_VOID = new HashSet<String>();
+    static {
+        Collections.addAll(HTML_VOID, "area", "base", "br", "col", "embed", "hr", "img", "input",
+                "link", "meta", "param", "source", "track", "wbr");
+    }
     private static final Map<String, String> ENTITIES = htmlEntities();
 
     private BookParser() { }
@@ -246,16 +251,17 @@ public final class BookParser {
                     throw new IOException("此 EPUB 含 DRM 版权保护，暂不支持解密");
                 if (lower.equals("meta-inf/encryption.xml")) {
                     EncryptionHandler encryption = new EncryptionHandler();
-                    parseXml(archive.read(path), encryption);
+                    parseXml(archive.read(path), encryption, path);
                     if (encryption.unsupported || encryption.methods == 0)
                         throw new IOException("此 EPUB 含 DRM 或不支持的加密内容，暂不支持解密");
                 }
             }
             ContainerHandler container = new ContainerHandler();
-            parseXml(archive.read("META-INF/container.xml"), container);
+            parseXml(archive.read("META-INF/container.xml"), container, "META-INF/container.xml");
             if (container.rootfile == null) throw new IOException("EPUB container.xml 缺少 OPF 路径");
+            String opfPath = resolvePath("", container.rootfile);
             PackageHandler opf = new PackageHandler();
-            parseXml(archive.read(resolvePath("", container.rootfile)), opf);
+            parseXml(archive.read(opfPath), opf, opfPath);
             if (opf.spine.isEmpty()) throw new IOException("EPUB 缺少阅读顺序 spine");
             for (String id : opf.spine) {
                 checkpoint(check);
@@ -676,18 +682,18 @@ public final class BookParser {
                 }
                 if (lower.equals("meta-inf/encryption.xml")) {
                     EncryptionHandler encryption = new EncryptionHandler();
-                    parseXml(archive.read(path), encryption);
+                    parseXml(archive.read(path), encryption, path);
                     if (encryption.unsupported || encryption.methods == 0) {
                         throw new IOException("此 EPUB 含 DRM 或不支持的加密内容，暂不支持解密");
                     }
                 }
             }
             ContainerHandler container = new ContainerHandler();
-            parseXml(archive.read("META-INF/container.xml"), container);
+            parseXml(archive.read("META-INF/container.xml"), container, "META-INF/container.xml");
             if (container.rootfile == null) throw new IOException("EPUB container.xml 缺少 OPF 路径");
             String opfPath = resolvePath("", container.rootfile);
             PackageHandler opf = new PackageHandler();
-            parseXml(archive.read(opfPath), opf);
+            parseXml(archive.read(opfPath), opf, opfPath);
             if (opf.spine.isEmpty()) throw new IOException("EPUB 缺少阅读顺序 spine");
             String base = directoryOf(opfPath);
             Map<String, String> labels = tocLabels(archive, opf, base);
@@ -702,7 +708,7 @@ public final class BookParser {
                 }
                 String path = resolvePath(base, item.href);
                 HtmlHandler html = new HtmlHandler();
-                parseXml(archive.read(path), html);
+                parseContentXml(archive.read(path), html, path);
                 itemNumber++;
                 String title = chapterTitle(labels, path, html, itemNumber - 1);
                 String plain=html.plainText();
@@ -735,18 +741,18 @@ public final class BookParser {
                 }
                 if (lower.equals("meta-inf/encryption.xml")) {
                     EncryptionHandler encryption = new EncryptionHandler();
-                    parseXml(archive.read(path), encryption);
+                    parseXml(archive.read(path), encryption, path);
                     if (encryption.unsupported || encryption.methods == 0) {
                         throw new IOException("此 EPUB 含 DRM 或不支持的加密内容，暂不支持解密");
                     }
                 }
             }
             ContainerHandler container = new ContainerHandler();
-            parseXml(archive.read("META-INF/container.xml"), container);
+            parseXml(archive.read("META-INF/container.xml"), container, "META-INF/container.xml");
             if (container.rootfile == null) throw new IOException("EPUB container.xml 缺少 OPF 路径");
             String opfPath = resolvePath("", container.rootfile);
             PackageHandler opf = new PackageHandler();
-            parseXml(archive.read(opfPath), opf);
+            parseXml(archive.read(opfPath), opf, opfPath);
             if (opf.spine.isEmpty()) throw new IOException("EPUB 缺少阅读顺序 spine");
             String base = directoryOf(opfPath);
             Map<String, String> labels = tocLabels(archive, opf, base);
@@ -761,7 +767,7 @@ public final class BookParser {
                 }
                 String path = resolvePath(base, item.href);
                 HtmlHandler html = new HtmlHandler();
-                parseXml(archive.read(path), html);
+                parseContentXml(archive.read(path), html, path);
                 itemNumber++;
                 String title = chapterTitle(labels, path, html, itemNumber - 1);
                 String plain = html.plainText();
@@ -853,7 +859,7 @@ public final class BookParser {
             Long size = archive.sizes.get(path);
             if (size == null || size > 2L * 1024 * 1024) return;
             TocHandler handler = new TocHandler(ncx);
-            parseXml(archive.readDisplay(path), handler);
+            parseXml(archive.readDisplay(path), handler, path);
             for (TocLink link : handler.links) {
                 if (link.href == null || link.href.length() > 8192) continue;
                 String title = boundedTitle(link.label.toString());
@@ -976,11 +982,11 @@ public final class BookParser {
             try {
                 checkEncryption(archive);
                 ContainerHandler container = new ContainerHandler();
-                parseXml(archive.read("META-INF/container.xml"), container);
+                parseXml(archive.read("META-INF/container.xml"), container, "META-INF/container.xml");
                 if (container.rootfile == null) throw new IOException("EPUB 缺少OPF文件");
                 String opfPath = resolvePath("", container.rootfile);
                 PackageHandler opf = new PackageHandler();
-                parseXml(archive.read(opfPath), opf);
+                parseXml(archive.read(opfPath), opf, opfPath);
                 if (opf.spine.isEmpty()) throw new IOException("EPUB 缺少阅读顺序");
                 bookTitle = trimWhitespace(opf.title.toString()).isEmpty() ? fileTitle(file) : boundedTitle(opf.title.toString());
                 String base = directoryOf(opfPath);
@@ -1005,7 +1011,7 @@ public final class BookParser {
                     String path = resolvePath(base, item.href);
                     paths.add(path);
                     HtmlHandler text = new HtmlHandler();
-                    parseXml(archive.readDisplay(path), text);
+                    parseContentXml(archive.readDisplay(path), text, path);
                     titles.add(chapterTitle(labels, path, text, paths.size() - 1));
                 }
                 success = true;
@@ -1051,7 +1057,7 @@ public final class BookParser {
                 if (combined.length() <= 4096) rules.put(selector, combined);
             }
             RichHandler handler = new RichHandler(this, directoryOf(path), rules, applyBookCss);
-            parseXml(archive.readDisplay(path), handler);
+            parseContentXml(archive.readDisplay(path), handler, path);
             return handler.result.toString();
         }
         public synchronized EpubImage image(String token) throws IOException {
@@ -1087,7 +1093,7 @@ public final class BookParser {
                 throw new IOException("此EPUB包含DRM版权保护，暂不支持解密");
             if (lower.equals("meta-inf/encryption.xml")) {
                 EncryptionHandler encryption = new EncryptionHandler();
-                parseXml(archive.readDisplay(path), encryption);
+                parseXml(archive.readDisplay(path), encryption, path);
                 if (encryption.unsupported || encryption.methods == 0)
                     throw new IOException("此EPUB包含DRM或不支持的加密");
             }
@@ -1119,11 +1125,11 @@ public final class BookParser {
         if (file == null || !file.isFile() || !file.canRead()) return null;
         try (Archive archive = new Archive(file, null)) {
             ContainerHandler container = new ContainerHandler();
-            parseXml(archive.read("META-INF/container.xml"), container);
+            parseXml(archive.read("META-INF/container.xml"), container, "META-INF/container.xml");
             if (container.rootfile == null) return null;
             String opfPath = resolvePath("", container.rootfile);
             PackageHandler opf = new PackageHandler();
-            parseXml(archive.read(opfPath), opf);
+            parseXml(archive.read(opfPath), opf, opfPath);
             String base = directoryOf(opfPath);
             Item cover = findCoverItem(opf, base);
             if (cover == null) return null;
@@ -1453,7 +1459,10 @@ public final class BookParser {
     /** Resolve URI references inside the archive, permitting parent paths only within the ZIP root. */
     private static String resolvePath(String base, String reference) throws IOException {
         try {
-            URI uri = new URI(reference);
+            // Some otherwise readable EPUBs store literal spaces in ZIP names and href/full-path.
+            // Escape only U+0020, before URI parsing: scheme/authority/query checks and the single
+            // percent-decoding traversal check below still apply to the original reference.
+            URI uri = new URI(reference.replace(" ", "%20"));
             if (uri.isAbsolute() || uri.getRawAuthority() != null || uri.getRawQuery() != null) {
                 throw new IOException("EPUB 禁止外部或非本地资源路径：" + reference);
             }
@@ -1497,12 +1506,37 @@ public final class BookParser {
         return slash < 0 ? "" : path.substring(0, slash + 1);
     }
 
+    private static void parseXml(byte[] bytes, DefaultHandler handler, String resourcePath) throws IOException {
+        try { parseXml(bytes, handler); }
+        catch (IOException error) { throw new IOException("EPUB 资源 " + resourcePath + "：" + error.getMessage(), error); }
+    }
+
+    private static void parseContentXml(byte[] bytes, DefaultHandler handler, String resourcePath) throws IOException {
+        try { parseContentXml(bytes, handler); }
+        catch (IOException error) { throw new IOException("EPUB 资源 " + resourcePath + "：" + error.getMessage(), error); }
+    }
+
+    /** Metadata stays strict XML: never repair container, OPF, NCX or encryption documents. */
     private static void parseXml(byte[] bytes, DefaultHandler handler) throws IOException {
+        parsePreparedXml(prepareXml(decodeXml(bytes), false), handler);
+    }
+
+    /** Only manifest-declared XHTML/HTML spine documents may use the controlled HTML fallback. */
+    private static void parseContentXml(byte[] bytes, DefaultHandler handler) throws IOException {
+        String xml = prepareXml(decodeXml(bytes), true);
         try {
-            String xml = decodeXml(bytes);
-            // Remove harmless HTML5 / recognized W3C XHTML doctype identifiers without fetching.
-            // Reject internal subsets, other DTDs and entities before any platform SAX parser sees them.
-            xml = prepareXml(xml);
+            // Validate before delivering events: a failed SAX pass must not partially populate
+            // either the plain-text or illustrated handler and duplicate text on retry.
+            parsePreparedXml(xml, new DefaultHandler());
+        } catch (IOException malformed) {
+            if (!(malformed.getCause() instanceof SAXParseException)) throw malformed;
+            xml = repairContentXml(xml);
+        }
+        parsePreparedXml(xml, handler);
+    }
+
+    private static void parsePreparedXml(String xml, DefaultHandler handler) throws IOException {
+        try {
             // A Reader avoids reinterpreting an original encoding declaration after decoding.
             SAXParserFactory factory = SAXParserFactory.newInstance();
             factory.setNamespaceAware(true);
@@ -1540,7 +1574,7 @@ public final class BookParser {
         }
     }
 
-    private static String prepareXml(String xml) throws IOException {
+    private static String prepareXml(String xml, boolean content) throws IOException {
         StringBuilder result = new StringBuilder(xml.length());
         int index = 0;
         while (index < xml.length()) {
@@ -1578,7 +1612,7 @@ public final class BookParser {
                     throw new IOException("EPUB XML 禁止 DTD、外部实体及实体声明");
                 }
             }
-            if (xml.charAt(index) == '&') {
+            if (content && xml.charAt(index) == '&') {
                 Matcher entity = HTML_ENTITY.matcher(xml).region(index, xml.length());
                 if (entity.lookingAt() && ENTITIES.containsKey(entity.group(1))) {
                     result.append(ENTITIES.get(entity.group(1)));
@@ -1588,8 +1622,207 @@ public final class BookParser {
             }
             result.append(xml.charAt(index++));
         }
-        // Repair unclosed HTML void elements common in EPUB 2 content before SAX sees them.
-        return VOID_ELEMENT.matcher(result.toString()).replaceAll("<$1$2/>");
+        return result.toString();
+    }
+
+    /**
+     * Bounded, deliberately small HTML repair, not a general XML recovery parser. It balances
+     * crossed/missing end tags, HTML optional paragraph/list/cell ends, void elements and quoted
+     * or unquoted HTML attributes. An explicit html/body envelope is required. Declarations were
+     * already checked by prepareXml; unknown entities, invalid names/namespaces and invalid XML
+     * characters still fail the final secure SAX pass. No fetch, DTD expansion or DOM is involved.
+     */
+    private static String repairContentXml(String xml) throws IOException {
+        StringBuilder out = new StringBuilder(xml.length());
+        ArrayDeque<String> stack = new ArrayDeque<String>();
+        boolean html = false, body = false;
+        int index = 0;
+        while (index < xml.length()) {
+            if (out.length() > MAX_EPUB_ENTRY_BYTES * 2) throw new IOException("EPUB 正文修复结果过大");
+            String raw = stack.peekLast();
+            String rawName = raw == null ? "" : element(null, raw);
+            if ("script".equals(rawName) || "style".equals(rawName)) {
+                // Raw-text content cannot manufacture markup or escape a hidden script. Only
+                // its matching end tag terminates it, including when it contains '<' or '&'.
+                int end = rawTextEnd(xml, index, raw);
+                appendContentText(out, xml, index, end < 0 ? xml.length() : end, true);
+                index = end < 0 ? xml.length() : end;
+                if (end < 0) break;
+            }
+            if (xml.charAt(index) != '<') {
+                int end = xml.indexOf('<', index);
+                if (end < 0) end = xml.length();
+                appendContentText(out, xml, index, end, false);
+                index = end;
+                continue;
+            }
+            String terminator = xml.startsWith("<!--", index) ? "-->"
+                    : xml.startsWith("<![CDATA[", index) ? "]]>" : xml.startsWith("<?", index) ? "?>" : null;
+            if (terminator != null) {
+                int end = xml.indexOf(terminator, index + 2);
+                if (end < 0) throw new IOException("EPUB XML 注释或 CDATA 未闭合");
+                end += terminator.length();
+                if ((long) out.length() + end - index > MAX_EPUB_ENTRY_BYTES * 2)
+                    throw new IOException("EPUB 正文修复结果过大");
+                out.append(xml, index, end);
+                index = end;
+                continue;
+            }
+            int start = index + 1;
+            boolean closing = start < xml.length() && xml.charAt(start) == '/';
+            if (closing) start++;
+            int nameEnd = start;
+            while (nameEnd < xml.length() && contentNameChar(xml.charAt(nameEnd))) nameEnd++;
+            if (nameEnd == start || !contentNameStart(xml.charAt(start))) {
+                if (start < xml.length() && xml.charAt(start) == '!') throw new IOException("EPUB 正文含不支持的声明");
+                out.append("&lt;"); index++; continue;
+            }
+            int end = contentTagEnd(xml, nameEnd);
+            String name = xml.substring(start, nameEnd).toLowerCase(Locale.ROOT);
+            String local = element(null, name);
+            if (closing) {
+                if (!xml.substring(nameEnd, end).trim().isEmpty()) throw new IOException("EPUB 正文结束标签无效");
+                if (stack.contains(name)) closeContentThrough(out, stack, name);
+            } else {
+                if (!html) {
+                    if (!"html".equals(local)) throw new IOException("EPUB 正文修复需要 html/body 结构");
+                    html = true;
+                }
+                if ("body".equals(local)) {
+                    if (body || contentAncestor(stack, "html") == null) throw new IOException("EPUB 正文 body 结构无效");
+                    body = true;
+                    String head = contentAncestor(stack, "head");
+                    if (head != null) closeContentThrough(out, stack, head);
+                }
+                closeOptionalContent(out, stack, local);
+                int limit = end;
+                while (limit > nameEnd && Character.isWhitespace(xml.charAt(limit - 1))) limit--;
+                boolean empty = limit > nameEnd && xml.charAt(limit - 1) == '/';
+                if (empty) limit--;
+                out.append('<').append(name);
+                appendContentAttributes(out, xml, nameEnd, limit);
+                if (empty || HTML_VOID.contains(local)) out.append("/>");
+                else {
+                    if (stack.size() >= 256) throw new IOException("EPUB XML 嵌套过深");
+                    out.append('>'); stack.addLast(name);
+                }
+            }
+            index = end + 1;
+        }
+        if (!html || !body) throw new IOException("EPUB 正文修复需要 html/body 结构");
+        while (!stack.isEmpty()) out.append("</").append(stack.removeLast()).append('>');
+        if (out.length() > MAX_EPUB_ENTRY_BYTES * 2) throw new IOException("EPUB 正文修复结果过大");
+        return out.toString();
+    }
+
+    private static int rawTextEnd(String xml, int start, String name) {
+        for (int index = xml.indexOf("</", start); index >= 0; index = xml.indexOf("</", index + 2)) {
+            int end = index + 2 + name.length();
+            if (end < xml.length() && xml.regionMatches(true, index + 2, name, 0, name.length())
+                    && (xml.charAt(end) == '>' || Character.isWhitespace(xml.charAt(end)))) return index;
+        }
+        return -1;
+    }
+
+    private static int contentTagEnd(String xml, int start) throws IOException {
+        char quote = 0;
+        for (int index = start; index < xml.length() && index - start <= 65536; index++) {
+            char c = xml.charAt(index);
+            if (quote != 0) { if (c == quote) quote = 0; }
+            else if (c == '\'' || c == '"') quote = c;
+            else if (c == '>') return index;
+            else if (c == '<') throw new IOException("EPUB 正文标签未闭合");
+        }
+        throw new IOException("EPUB 正文标签未闭合或过长");
+    }
+
+    private static boolean contentNameStart(char c) {
+        return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_';
+    }
+
+    private static boolean contentNameChar(char c) {
+        return contentNameStart(c) || c >= '0' && c <= '9' || c == ':' || c == '-' || c == '.';
+    }
+
+    private static void appendContentAttributes(StringBuilder out, String xml, int index, int end) throws IOException {
+        Set<String> names = new HashSet<String>();
+        while (index < end) {
+            while (index < end && Character.isWhitespace(xml.charAt(index))) index++;
+            if (index == end) break;
+            int start = index;
+            if (!contentNameStart(xml.charAt(index))) throw new IOException("EPUB 正文属性名称无效");
+            while (index < end && contentNameChar(xml.charAt(index))) index++;
+            String name = xml.substring(start, index).toLowerCase(Locale.ROOT);
+            if (!names.add(name)) throw new IOException("EPUB 正文属性重复");
+            while (index < end && Character.isWhitespace(xml.charAt(index))) index++;
+            String value = name; // HTML boolean attribute.
+            if (index < end && xml.charAt(index) == '=') {
+                index++;
+                while (index < end && Character.isWhitespace(xml.charAt(index))) index++;
+                if (index == end) throw new IOException("EPUB 正文属性缺少值");
+                char quote = xml.charAt(index);
+                if (quote == '\'' || quote == '"') {
+                    start = ++index;
+                    while (index < end && xml.charAt(index) != quote) index++;
+                    if (index == end) throw new IOException("EPUB 正文属性未闭合");
+                    value = xml.substring(start, index++);
+                } else {
+                    start = index;
+                    while (index < end && !Character.isWhitespace(xml.charAt(index))) index++;
+                    value = xml.substring(start, index);
+                    if (value.indexOf('<') >= 0 || value.indexOf('"') >= 0 || value.indexOf('\'') >= 0 || value.indexOf('=') >= 0)
+                        throw new IOException("EPUB 正文属性值无效");
+                }
+            }
+            out.append(' ').append(name).append("=\"");
+            appendContentText(out, value, 0, value.length(), false);
+            out.append('"');
+        }
+    }
+
+    private static void appendContentText(StringBuilder out, String text, int start, int end, boolean raw) throws IOException {
+        for (int index = start; index < end; index++) {
+            // Check before entity escaping can amplify a raw script/style or attribute value.
+            if (out.length() + 6 > MAX_EPUB_ENTRY_BYTES * 2) throw new IOException("EPUB 正文修复结果过大");
+            char c = text.charAt(index);
+            if (c == '<') out.append("&lt;");
+            else if (c == '"') out.append("&quot;");
+            else if (c == '&' && (raw || index + 1 == end
+                    || !(text.charAt(index + 1) == '#' || contentNameStart(text.charAt(index + 1))))) out.append("&amp;");
+            else out.append(c);
+        }
+    }
+
+    private static void closeContentThrough(StringBuilder out, ArrayDeque<String> stack, String name) {
+        String current;
+        do { current = stack.removeLast(); out.append("</").append(current).append('>'); }
+        while (!current.equals(name));
+    }
+
+    private static String contentAncestor(ArrayDeque<String> stack, String local) {
+        java.util.Iterator<String> parents = stack.descendingIterator();
+        while (parents.hasNext()) {
+            String parent = parents.next();
+            if (local.equals(element(null, parent))) return parent;
+        }
+        return null;
+    }
+
+    private static void closeOptionalContent(StringBuilder out, ArrayDeque<String> stack, String name) {
+        String paragraph = BLOCKS.contains(name) ? contentAncestor(stack, "p") : null;
+        if (paragraph != null) closeContentThrough(out, stack, paragraph);
+        String optional = "li".equals(name) ? "li" : "dt".equals(name) || "dd".equals(name) ? "dt dd"
+                : "tr".equals(name) ? "tr" : "td".equals(name) || "th".equals(name) ? "td th"
+                : name.matches("h[1-6]") ? "h1 h2 h3 h4 h5 h6" : null;
+        if (optional == null) return;
+        java.util.Iterator<String> parents = stack.descendingIterator();
+        while (parents.hasNext()) {
+            String parent = parents.next();
+            String local = element(null, parent);
+            if ((" " + optional + " ").contains(" " + local + " ")) { closeContentThrough(out, stack, parent); return; }
+            if ("body".equals(local) || "html".equals(local) || "ul".equals(local) || "ol".equals(local)
+                    || "dl".equals(local) || "table".equals(local) || "tr".equals(local)) return;
+        }
     }
 
     private static void setFeature(SAXParserFactory factory, String feature, boolean enabled) {
