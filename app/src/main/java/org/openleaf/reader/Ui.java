@@ -97,4 +97,18 @@ final class Ui {
         root.setOnApplyWindowInsetsListener((v,insets)->{v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom());return insets;});
         root.requestApplyInsets();
     }
+
+    // ---- v4 方向令牌注入点：以下全部为追加；上方原常量与原方法签名一行未改 ----
+
+    /** v4 取色统一入口：从 UiPrefs.direction(c) 读偏好，委托 UiTokens.color(direction, role)。 */
+    static int color(Context c,UiTokens.Role role){return UiTokens.color(UiPrefs.direction(c),role);}
+
+    /** v4 状态底：按方向取 warn/danger 底，禁止页面硬编码浅底。 */
+    static int statusBackground(Context c,UiTokens.Status s){return UiTokens.statusBackground(UiPrefs.direction(c),s);}
+
+    /** v4 状态前景：按方向取 warn/danger 字色。 */
+    static int statusForeground(Context c,UiTokens.Status s){return UiTokens.statusForeground(UiPrefs.direction(c),s);}
+
+    /** v4 危险实心按钮前景：A/B 白、C 深。 */
+    static int onStatus(Context c){return UiTokens.onStatus(UiPrefs.direction(c));}
 }
