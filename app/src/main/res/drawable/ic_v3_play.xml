@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v3 原型 symbol i-play；currentColor 以 v3 ink 为默认，调用方按播控角色 setTint。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="m8 4 12 8-12 8Z"
+        android:fillColor="#FF27382F" />
+</vector>
