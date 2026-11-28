@@ -25,19 +25,33 @@ android {
             jniLibs.srcDirs = ['src/main/jniLibs']
         }
     }
+    // Beta 自签名配置：仅用于分发给朋友测试，不用于正式上架。
+    signingConfigs {
+        beta {
+            storeFile file('release-beta.jks')
+            storePassword 'openleaf-beta-2026'
+            keyAlias 'openleaf-beta'
+            keyPassword 'openleaf-beta-2026'
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+    }
     defaultConfig {
         applicationId 'org.openleaf.reader'
         minSdk 26
         targetSdk 35
-        versionCode 75
-        versionName '0.63.0'
+        versionCode 76
+        versionName '0.64.0'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
     buildTypes {
-        release { minifyEnabled false }
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.beta
+        }
     }
     lint { abortOnError true }
 }
