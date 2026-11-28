@@ -1063,14 +1063,14 @@ public final class MainActivity extends Activity {
         BookMetadataStore.Card metadata=cardMetadata.get(book.id);
         TextView format=Ui.text(this,(metadata!=null&&metadata.favorite?"★ ":"")+book.format.toUpperCase(Locale.ROOT),10,0xBBFFFFFF);format.setGravity(Gravity.CENTER);cover.addView(format);
         android.widget.FrameLayout coverFrame=new android.widget.FrameLayout(this);coverFrame.setContentDescription("打开 "+book.title);coverFrame.addView(cover,new android.widget.FrameLayout.LayoutParams(-1,-1));
-        // 缺图 / 预算用尽的占位；成功解码后再隐藏。绑定前先清空 image 防 View 复用残留。
-        TextView placeholder=Ui.text(this,"无封面",11,Ui.MUTED);placeholder.setBackgroundColor(Ui.PANEL);
-        placeholder.setPadding(Ui.dp(this,8),Ui.dp(this,4),Ui.dp(this,8),Ui.dp(this,4));placeholder.setGravity(Gravity.CENTER);
-        coverFrame.addView(placeholder,new android.widget.FrameLayout.LayoutParams(-2,-2,Gravity.CENTER));
         boolean hasCover=metadata!=null&&!metadata.coverName.isEmpty();
         if(hasCover&&coverDecodesThisPage<4){
             coverDecodesThisPage++;
             final String coverName=metadata.coverName;
+            // 只在确有封面要解码时创建占位；无封面的书回到 0.63 基线，零新增 View。
+            final TextView placeholder=Ui.text(this,"无封面",11,Ui.MUTED);placeholder.setBackgroundColor(Ui.PANEL);
+            placeholder.setPadding(Ui.dp(this,8),Ui.dp(this,4),Ui.dp(this,8),Ui.dp(this,4));placeholder.setGravity(Gravity.CENTER);
+            coverFrame.addView(placeholder,new android.widget.FrameLayout.LayoutParams(-2,-2,Gravity.CENTER));
             android.widget.ImageView image=new android.widget.ImageView(this);image.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
             image.setContentDescription(book.title+" 封面");image.setImageBitmap(null);
             coverFrame.addView(image,new android.widget.FrameLayout.LayoutParams(-1,-1));
