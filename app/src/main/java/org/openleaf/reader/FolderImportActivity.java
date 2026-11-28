@@ -87,7 +87,7 @@ public final class FolderImportActivity extends Activity {
     }
 
     private void build() {
-        root=Ui.column(this); Ui.mount(this,root,UiTokens.color(UiTokens.Role.BACKGROUND));
+        root=Ui.column(this); Ui.mount(this,root,Ui.color(this,UiTokens.Role.BACKGROUND));
         body=Ui.column(this); Ui.pad(body,UiTokens.spacingDp(UiTokens.Spacing.MD));
         root.addView(body,new LinearLayout.LayoutParams(-1,0,1));
         heading=Ui.tokenText(this,"批量导入文件夹",UiTokens.Typography.PAGE_TITLE,UiTokens.Role.PRIMARY);
@@ -251,8 +251,11 @@ public final class FolderImportActivity extends Activity {
         group.setContentDescription("同时导入目录分组信息");
         view.addView(group);
         view.addView(Ui.tokenText(this,"关闭后，所选文件会直接放在导入文件夹的直接层级。",UiTokens.Typography.AUX,UiTokens.Role.PRIMARY));
+        view.addView(Ui.tokenText(this,"保存方式：引用原文件（不复制到书库）；移动、删除原文件或撤销目录授权后需重新关联。",UiTokens.Typography.AUX,UiTokens.Role.SECONDARY));
         confirmDialog=new AlertDialog.Builder(this).setTitle("导入确认")
-                .setMessage("将导入 "+count+" 个文件"+(size>0?"，约 "+sizeText(size):"")+"。")
+                .setMessage("提交总数：" + count + " 个文件" + (size>0?"，约 "+sizeText(size):"") + "。"
+                        + "\n目标合集：" + IMPORT_ROOT_NAME + "（" + (group.isChecked() ? "按子文件夹建立分组" : "直接放在导入文件夹") + "）"
+                        + "\n保存方式：引用原文件（不复制到书库）。")
                 .setView(view).setNegativeButton("取消",null)
                 .setPositiveButton("确认",(d,w)->{
                     // 提交当下重新读取已选集合与分组选项，不沿用弹层打开时的快照。
@@ -605,7 +608,7 @@ public final class FolderImportActivity extends Activity {
             LinearLayout row=convert instanceof LinearLayout?(LinearLayout)convert:Ui.row(context);
             if(convert==null){CheckBox box=new CheckBox(context);box.setTag("check");row.addView(box);LinearLayout info=Ui.column(context);info.setTag("info");row.addView(info,new LinearLayout.LayoutParams(0,-2,1));Ui.pad(row,4);
                 // 文件行 SURFACE 底：相对路径/状态等次级文字只能落在 SURFACE 上（4.88:1）。
-                row.setBackground(Ui.shape(UiTokens.color(UiTokens.Role.SURFACE),UiTokens.radiusDp(UiTokens.Radius.CARD),context));}
+                row.setBackground(Ui.shape(Ui.color(context,UiTokens.Role.SURFACE),UiTokens.radiusDp(UiTokens.Radius.CARD),context));}
             CheckBox box=(CheckBox)row.findViewWithTag("check");LinearLayout info=(LinearLayout)row.findViewWithTag("info");
             DirectoryScanner.Candidate c=(DirectoryScanner.Candidate)getItem(p);if(c==null)return row;
             info.removeAllViews();info.addView(Ui.tokenText(context,c.name,UiTokens.Typography.BODY,UiTokens.Role.PRIMARY));

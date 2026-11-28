@@ -76,6 +76,9 @@ public final class LocalFilesActivity extends Activity {
         path=Ui.text(this,"仅访问你授权的目录",13,Ui.MUTED);path.setMaxLines(2);path.setEllipsize(TextUtils.TruncateAt.MIDDLE);header.addView(path);
         LinearLayout tools=Ui.row(this);up=Ui.button(this,"上一级",this::parent);tools.addView(up,Ui.weight());tools.addView(Ui.button(this,"刷新",this::refresh),Ui.weight());header.addView(tools);
         status=Ui.text(this,"选择文件夹开始浏览；长按文件可重命名或删除。",12,Ui.GREEN);status.setMaxLines(3);header.addView(status);
+        // IMP-SET 对账口径边界：本页只浏览/管理已授权目录，不在此写入书架；
+        // 真正的导入结果按成功/已存在/失败/未处理对账，取消不计失败，重试仅失败项。
+        header.addView(Ui.text(this,"本页不写入书架；入库请走书库「导入」。导入结果按成功／已存在／失败／未处理对账，取消不计失败，重试仅针对失败项。",12,Ui.MUTED));
         ListView list=new ListView(this);adapter=new FileAdapter();list.setAdapter(adapter);root.addView(list,new LinearLayout.LayoutParams(-1,0,1));
         list.setOnItemClickListener((p,v,position,id)->{if(!busy)open(files.get(position));});
         list.setOnItemLongClickListener((p,v,position,id)->{if(!busy)fileMenu(files.get(position));return true;});

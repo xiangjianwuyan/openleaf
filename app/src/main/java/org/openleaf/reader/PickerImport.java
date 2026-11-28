@@ -99,6 +99,32 @@ final class PickerImport {
 
     void notifyView() { if (listener != null) listener.run(); }
 
+    // ---- v4 §6.2 导入来源面板：内置路径置顶，来源按需出现 ----
+
+    /** 内置来源置顶；当前插件契约只有 txt-report，没有导入能力来源，不渲染灰色死入口。 */
+    static String[] sourceItems(Context c) {
+        return new String[]{"选择文件", "扫描文件夹"};
+    }
+
+    static String sourceNote(Context c) {
+        return "选择文件一步到系统文件选择器；扫描文件夹批量导入已授权目录。"
+                + "\n当前没有已启用的导入来源扩展；本地导入始终可用。";
+    }
+
+    /** P1-B 未就绪时底部链接只指向真实「扩展已安装/暂无来源」说明，绝不打开假市场。 */
+    static String extensionBoundaryText(Context c) {
+        int installed = 0, enabled = 0;
+        try {
+            for (PluginStore.Installed item : new PluginStore(c).list()) {
+                installed++;
+                if (item.enabled) enabled++;
+            }
+        } catch (Exception unreadable) { /* 清单读不到时按 0 呈现，不编造来源 */ }
+        return "当前已安装扩展 " + installed + " 个（已启用 " + enabled + " 个），其中没有导入来源扩展。"
+                + "\n本地选择文件与扫描文件夹不依赖插件，始终可用。"
+                + "\n此处不提供扩展市场或虚构来源入口；若后续出现真实来源扩展，会在已启用列表出现。";
+    }
+
     /**
      * 把底层异常消息归入「权限 / 超限 / 格式或解析 / 其他」四类，分类依据只读取既有文案，
      * 不新增依赖也不改写原始消息：前缀之后始终保留全文，复制清单/另存 txt 仍可拿到细节。
