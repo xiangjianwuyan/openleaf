@@ -166,14 +166,16 @@ public final class UiTokensTest {
         equal(ThemePalette.presetInk(1), UiTokens.paperInk(1, customBg, 0));
 
         // 规格 §2.1 的纸墨三档数值来自原型纸色（仅作对比度核算，不写入实现常量），
-        // 通过自定义纸/墨入口复算，验证组合确实达到规格标注的比值。
-        approx(9.45, paperRatio(0xFFF4EDDF, 0xFF3F3C34), 0.01, "paper-ink/paper");
-        approx(10.96, paperRatio(0xFFFAF9F3, 0xFF373A34), 0.01, "paper-ink/浅白");
-        approx(10.03, paperRatio(0xFF242923, 0xFFD6D5C7), 0.01, "paper-ink/夜读");
+        // 通过自定义纸/墨入口复算。关键：浅白与夜读必须用各自纸色的墨配对，
+        // 不能拿主 paper-ink(#3F3C34) 去配——那会算出 10.44 / 1.35 的假 FAIL。
+        approx(9.45, paperPairRatio(0xFFF4EDDF, 0xFF3F3C34), 0.01, "主 paper-ink/主 paper");
+        approx(10.96, paperPairRatio(0xFFFAF9F3, 0xFF373A34), 0.01, "浅白 ink/浅白 paper");
+        approx(10.03, paperPairRatio(0xFF242923, 0xFFD6D5C7), 0.01, "夜读 ink/夜读 paper");
     }
 
-    private static double paperRatio(int paper, int ink) {
-        return ThemePalette.ratio(UiTokens.paperInk(0, paper, ink), UiTokens.paper(0, paper, ink));
+    /** 用传入的纸色与其"自己的墨色"配对复算对比度，不混用主 paper-ink。 */
+    private static double paperPairRatio(int paper, int ownInk) {
+        return ThemePalette.ratio(UiTokens.paperInk(0, paper, ownInk), UiTokens.paper(0, paper, ownInk));
     }
 
     private static void typographyRadiusSpacing() {
