@@ -3,6 +3,8 @@ package org.openleaf.reader;
 import org.openleaf.reader.application.ServiceRegistry;
 import org.openleaf.reader.core.DropBatch;
 import org.openleaf.reader.core.ImportUseCase;
+import org.openleaf.reader.core.NavDestination;
+import org.openleaf.reader.core.NavRouter;
 import org.openleaf.reader.core.ResolvedContinueReading;
 import org.openleaf.reader.core.UiTokens;
 
@@ -52,6 +54,9 @@ public final class MainActivity extends Activity {
     private static final String ROOT_LABEL = "来源文件夹";
     /** 标签视图回流：点标签时携带 normalizeTag 后的 tag_key，书库翻译成 #tag 查询。 */
     public static final String EXTRA_TAG = "openleaf.extra.tag";
+    /** I3：旧深链/自动化钩子的兼容入口键；路由由 NavRouter 纯函数给出可解释跳转。 */
+    public static final String EXTRA_LEGACY_TAB = NavRouter.LEGACY_TAB;
+    public static final String EXTRA_LEGACY_ENTRY = NavRouter.LEGACY_ENTRY;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     // 封面占位色板是装饰色，刻意不随主题变化（书架固定使用 Ui 全局色），不是散落的语义令牌。
     private final int[] covers = {0xFF315D4F, 0xFF8B6249, 0xFF59687A, 0xFF8C7752};
@@ -77,6 +82,8 @@ public final class MainActivity extends Activity {
     private int shelfScrollY;
     private boolean shelfPopulated;
     private int tab, bookPage;
+    /** I3：旧入口兼容跳转的一次性说明，由 show() 消费后清空，不静默丢失。 */
+    private String pendingLegacyNotice;
     private String query = "";
     private String folderId;
     private String folderLabel = ROOT_LABEL;
@@ -334,32 +341,33 @@ public final class MainActivity extends Activity {
     private void navigation() {
         navigation.removeAllViews();
         if(wide()){
-            TextView brand=Ui.title(this,"◫  OpenLeaf",24);Ui.pad(brand,8);navigation.addView(brand);
-            TextView caption=Ui.text(this,"青简 · 我的阅读空间",12,Ui.MUTED);Ui.pad(caption,8);navigation.addView(caption);Ui.gap(navigation,32);
+            // 导航 chrome 走方向令牌，不写死色值。
+            navigation.setBackgroundColor(Ui.color(this,UiTokens.Role.SURFACE));
+            TextView brand=Ui.text(this,"◫  OpenLeaf",24,Ui.color(this,UiTokens.Role.PRIMARY));
+            brand.setTypeface(android.graphics.Typeface.create(
+                    UiTokens.fontFamily(UiTokens.Typography.PAGE_TITLE),android.graphics.Typeface.BOLD));
+            Ui.pad(brand,8);navigation.addView(brand);
+            TextView caption=Ui.text(this,"青简 · 我的阅读空间",12,Ui.color(this,UiTokens.Role.SECONDARY));
+            Ui.pad(caption,8);navigation.addView(caption);Ui.gap(navigation,32);
         }
-        // v3 §3.10：5 项标签、路由、contentDescription、返回栈逐字不变；只修竖排。
-        String[] labels={"▤  书库","◎  发现","✧  想法","▦  记录","⚙  关于"};
-        String[] narrowLabels={"▤书库","◎发现","✧想法","▦记录","⚙关于"};
-        String[] descs={"切换到书库","切换到在线发现","打开想法","打开阅读记录","切换到关于"};
-        for(int i=0;i<labels.length;i++){
-            final int selected=i>3?i-2:i;
-            String text=wide()?labels[i]:narrowLabels[i]; // 窄屏去双空格，宽屏保留原文
-            Button item;
-            if(i==2) item=Ui.button(this,text,()->startActivity(new Intent(this,IdeasActivity.class)),descs[i]);
-            else if(i==3) item=Ui.button(this,text,()->startActivity(new Intent(this,StatsActivity.class)),descs[i]);
-            else item=Ui.button(this,text,()->{tab=selected;show();},descs[i]);
+        // I3：5→4 固定四目的地。标签/图标/contentDescription 全部来自 NavDestination 单一真源；
+        // T-B3 的单行/48dp/选中态实现逐行复用，不重写样式。
+        for(NavDestination dest : NavRouter.destinations()){
+            String text=wide()?dest.wideLabel():dest.narrowLabel();
+            final int targetTab=dest.id();
+            Button item=Ui.button(this,text,()->{tab=targetTab;show();},dest.desc());
             // 单行：大字号倍率下 ellipsize(END) 只截视觉，读屏 desc 仍完整。
             item.setTextSize(UiTokens.textSizeSp(UiTokens.Typography.TAB_LABEL));
             item.setSingleLine(true);item.setMaxLines(1);
             item.setEllipsize(android.text.TextUtils.TruncateAt.END);
             item.setMinWidth(Ui.dp(this,48));item.setMinimumWidth(Ui.dp(this,48));
             item.setPadding(Ui.dp(this,4),Ui.dp(this,2),Ui.dp(this,4),Ui.dp(this,2));
-            item.setTextColor(UiTokens.color(UiTokens.Role.PRIMARY));
+            item.setTextColor(Ui.color(this,UiTokens.Role.PRIMARY));
             // 选中态：accent 文字 + accent-soft 14dp 圆角底；图标字形与 medium 字重并用，不靠颜色 alone。
-            if(i!=2&&i!=3&&tab==selected){
-                item.setBackground(Ui.shape(UiTokens.color(UiTokens.Role.ACCENT_SOFT),
+            if(tab==targetTab){
+                item.setBackground(Ui.shape(Ui.color(this,UiTokens.Role.ACCENT_SOFT),
                         UiTokens.radiusDp(UiTokens.Radius.TAB_SELECTED),this));
-                item.setTextColor(UiTokens.color(UiTokens.Role.ACCENT));
+                item.setTextColor(Ui.color(this,UiTokens.Role.ACCENT));
                 item.setTypeface(android.graphics.Typeface.create(
                         UiTokens.fontFamily(UiTokens.Typography.TAB_LABEL),android.graphics.Typeface.BOLD));
             }
@@ -373,17 +381,18 @@ public final class MainActivity extends Activity {
             }
         }
         if(wide()){
-            Ui.gap(navigation,28);TextView label=Ui.text(this,"我的收藏",11,Ui.MUTED);Ui.pad(label,8);navigation.addView(label);
-            navigation.addView(Ui.button(this,"全部书籍",()->{tab=0;favoritesOnly=false;allBooks();},"显示全部书籍"));Ui.gap(navigation,6);
+            Ui.gap(navigation,28);TextView label=Ui.text(this,"我的收藏",11,Ui.color(this,UiTokens.Role.SECONDARY));Ui.pad(label,8);navigation.addView(label);
+            navigation.addView(Ui.button(this,"全部书籍",()->{tab=NavDestination.SHELF.id();favoritesOnly=false;allBooks();},"显示全部书籍"));Ui.gap(navigation,6);
             navigation.addView(Ui.button(this,"★ 珍藏",this::showFavorites,"查看珍藏书籍"));Ui.gap(navigation,6);
-            navigation.addView(Ui.button(this,"文件夹",()->{tab=0;favoritesOnly=false;rootFolder();},"浏览来源文件夹"));Ui.gap(navigation,6);
-            navigation.addView(Ui.button(this,"最近阅读",()->{sortOrder=2;tab=0;favoritesOnly=false;allBooks();},"按最近阅读排序"));Ui.gap(navigation,6);
-            navigation.addView(Ui.button(this,"想法",()->startActivity(new Intent(this,IdeasActivity.class)),"打开想法"));Ui.gap(navigation,6);
-            navigation.addView(Ui.button(this,"阅读记录",()->startActivity(new Intent(this,StatsActivity.class)),"查看阅读记录"));Ui.gap(navigation,6);
+            navigation.addView(Ui.button(this,"文件夹",()->{tab=NavDestination.SHELF.id();favoritesOnly=false;rootFolder();},"浏览来源文件夹"));Ui.gap(navigation,6);
+            navigation.addView(Ui.button(this,"最近阅读",()->{sortOrder=2;tab=NavDestination.SHELF.id();favoritesOnly=false;allBooks();},"按最近阅读排序"));Ui.gap(navigation,6);
+            // 旧「想法/阅读记录」外开入口已归入「我的 → 阅读与记录」；侧栏保留可解释直达。
+            navigation.addView(Ui.button(this,"阅读与记录",()->{tab=NavDestination.MINE.id();show();},"打开我的阅读与记录"));Ui.gap(navigation,6);
+            // 听书/音频是媒体内部分类，侧栏保留直达；窄屏由媒体页的来源入口承接。
             navigation.addView(Ui.button(this,"听书",()->startActivity(new Intent(this,TtsActivity.class)),"打开听书"));Ui.gap(navigation,6);
             navigation.addView(Ui.button(this,"音频",()->startActivity(new Intent(this,AudioPlayerActivity.class)),"打开音频播放器"));
             View spacer=new View(this);navigation.addView(spacer,new LinearLayout.LayoutParams(1,0,1));
-            TextView local=Ui.text(this,"本地书库\n离线也能安心阅读",12,Ui.MUTED);local.setLineSpacing(Ui.dp(this,6),1);Ui.pad(local,8);navigation.addView(local);
+            TextView local=Ui.text(this,"本地书库\n离线也能安心阅读",12,Ui.color(this,UiTokens.Role.SECONDARY));local.setLineSpacing(Ui.dp(this,6),1);Ui.pad(local,8);navigation.addView(local);
         }
     }
 
@@ -404,8 +413,23 @@ public final class MainActivity extends Activity {
 
     private void show() {
         if (isDestroyed() || page == null) return;
+        // I3：旧深链/自动化钩子只消费一次，给出可解释跳转，不静默丢失 tab=2 等旧语义。
+        Intent incoming=getIntent();
+        if(incoming!=null){
+            String legacyEntry=incoming.getStringExtra(EXTRA_LEGACY_ENTRY);
+            int legacyTab=incoming.getIntExtra(EXTRA_LEGACY_TAB,-1);
+            NavRouter.Route legacy=null;
+            if(legacyEntry!=null) legacy=NavRouter.fromLegacyEntry(legacyEntry);
+            else if(legacyTab>=0) legacy=NavRouter.fromLegacyTab(legacyTab);
+            if(legacy!=null){
+                tab=legacy.destination.id();
+                pendingLegacyNotice=legacy.explanation;
+                incoming.removeExtra(EXTRA_LEGACY_ENTRY);
+                incoming.removeExtra(EXTRA_LEGACY_TAB);
+            }
+        }
         if (shelfPopulated && libraryScroll != null) shelfScrollY = libraryScroll.getScrollY();
-        if (tab == 0) {
+        if (tab == NavDestination.SHELF.id()) {
             String scope = libraryScope();
             if (!scope.equals(shelfScope)) shelfScrollY = 0;
             shelfScope = scope;
@@ -420,9 +444,33 @@ public final class MainActivity extends Activity {
         libraryScroll = null;
         shelfPopulated = false;
         page.removeAllViews();
-        if (tab == 0) library();
-        else if (tab == 1) network();
-        else about();
+        // 切目的地只换承载页：query/选中/滚动由字段保存，返回原目的地时由 library() 还原。
+        NavDestination dest=NavRouter.destination(tab);
+        if (dest == NavDestination.SHELF) library();
+        else if (dest == NavDestination.MEDIA) network();
+        else if (dest == NavDestination.EXTENSIONS) {
+            // I3：扩展一级目的地外壳。P1-A 才填真实内容；本轮只呈现真实边界，
+            // 不渲染假市场/假插件/假权限开关，也不直接跳转 PluginActivity。
+            LinearLayout body=content();
+            body.addView(Ui.tokenText(this,"扩展",UiTokens.Typography.PAGE_TITLE,UiTokens.Role.PRIMARY));
+            Ui.gap(body,UiTokens.spacingDp(UiTokens.Spacing.LG));
+            body.addView(Ui.text(this,"发现",18,Ui.color(this,UiTokens.Role.PRIMARY)));
+            Ui.gap(body,6);
+            body.addView(Ui.text(this,
+                    "当前暂无可发现的扩展来源。扩展能力依赖后续宿主执行机制；在此之前，本地导入、阅读、播放与数据设置均可正常使用。",
+                    14,Ui.color(this,UiTokens.Role.SECONDARY)));
+            Ui.gap(body,16);
+            body.addView(Ui.text(this,"已安装",18,Ui.color(this,UiTokens.Role.PRIMARY)));
+            Ui.gap(body,6);
+            body.addView(Ui.text(this,
+                    "当前未安装扩展。扩展清单遵循真实边界（schema 1 · txt-report · TXT/MD · 16KiB/20/1MiB）；安装与管理入口将随扩展能力一并开放，本轮不提供假安装或假市场。",
+                    14,Ui.color(this,UiTokens.Role.SECONDARY)));
+        }
+        else about(); // 我的：阅读与记录 / 文件与任务 / 数据与设置
+        if(pendingLegacyNotice!=null){
+            Toast.makeText(this,pendingLegacyNotice,Toast.LENGTH_LONG).show();
+            pendingLegacyNotice=null;
+        }
     }
 
     private LinearLayout content() {
@@ -1844,23 +1892,46 @@ public final class MainActivity extends Activity {
 
     private void about() {
         LinearLayout body = content();
-        body.addView(Ui.text(this, "OPEN SOURCE · OFFLINE FIRST", 12, Ui.GREEN));
-        Ui.gap(body, 16);
-        body.addView(Ui.title(this, "青简 OpenLeaf", 30));
-        Ui.gap(body, 6);
+        body.addView(Ui.tokenText(this,"我的",UiTokens.Typography.PAGE_TITLE,UiTokens.Role.PRIMARY));
+        Ui.gap(body,UiTokens.spacingDp(UiTokens.Spacing.LG));
+
+        // 阅读与记录：旧「想法」「记录」外开入口迁入，原内容与编辑态不变。
+        body.addView(Ui.text(this,"阅读与记录",18,Ui.color(this,UiTokens.Role.PRIMARY)));
+        Ui.gap(body,6);
+        body.addView(Ui.button(this,"想法",()->startActivity(new Intent(this,IdeasActivity.class)),"打开想法（阅读与记录）"));
+        body.addView(Ui.button(this,"阅读记录",()->startActivity(new Intent(this,StatsActivity.class)),"查看阅读记录（阅读与记录）"));
+        Ui.gap(body,16);
+
+        // 文件与任务：备份恢复与任务中心按任务归位。
+        body.addView(Ui.text(this,"文件与任务",18,Ui.color(this,UiTokens.Role.PRIMARY)));
+        Ui.gap(body,6);
+        body.addView(Ui.button(this,"书库备份与恢复",()->startActivity(new Intent(this,BackupActivity.class)),"备份与恢复书库"));
+        body.addView(Ui.button(this,"任务中心",()->startActivity(new Intent(this,JobsActivity.class)),"查看导入与下载任务"));
+        Ui.gap(body,16);
+
+        // 数据与设置：关于文本/版本/许可证留我的；旧「应用插件」转向「扩展」一级目的地，
+        // 本轮不直接跳转 PluginActivity（P1-A 才填真实内容，不做假市场/假插件）。
+        body.addView(Ui.text(this,"数据与设置",18,Ui.color(this,UiTokens.Role.PRIMARY)));
+        Ui.gap(body,6);
+        body.addView(Ui.button(this,"应用插件与扩展",()->{tab=NavDestination.EXTENSIONS.id();show();},"打开扩展（原应用插件入口）"));
+        body.addView(Ui.button(this,"第三方许可与声明",this::showThirdPartyLicenses,"查看第三方许可与声明"));
+        Ui.gap(body,20);
+
+        // 关于文本（版本/许可证/边界）原样保留，仅把备份入口路径表述更新为「我的」。
+        body.addView(Ui.text(this,"OPEN SOURCE · OFFLINE FIRST",12,Ui.color(this,UiTokens.Role.SECONDARY)));
+        Ui.gap(body,16);
+        body.addView(Ui.text(this,"青简 OpenLeaf",30,Ui.color(this,UiTokens.Role.PRIMARY)));
+        Ui.gap(body,6);
         String buildLabel = "开发版";
         try {
             String version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
             if (version != null && !version.isEmpty()) buildLabel = version + "  /  " + buildLabel;
         } catch (android.content.pm.PackageManager.NameNotFoundException ignored) { }
-        body.addView(Ui.text(this, buildLabel, 14, Ui.MUTED));
-        Ui.gap(body, 16);
-        body.addView(Ui.button(this, "第三方许可与声明", this::showThirdPartyLicenses,"查看第三方许可与声明"));
-        body.addView(Ui.button(this, "应用插件", () -> startActivity(new Intent(this, PluginActivity.class)), "打开应用插件管理"));
-        body.addView(Ui.button(this, "书库备份与恢复", () -> startActivity(new Intent(this, BackupActivity.class)),"备份与恢复书库"));
-        Ui.gap(body, 24);
-        body.addView(Ui.text(this, "让每一本书，都有安静的一页。", 20, Ui.GREEN));
-        Ui.gap(body, 24);
+        body.addView(Ui.text(this, buildLabel, 14, Ui.color(this,UiTokens.Role.SECONDARY)));
+        Ui.gap(body,16);
+        Ui.gap(body,24);
+        body.addView(Ui.text(this,"让每一本书，都有安静的一页。",20,Ui.color(this,UiTokens.Role.SECONDARY)));
+        Ui.gap(body,24);
         body.addView(Ui.text(this,
                 "本地优先\n普通书籍通过系统授权直接读取原文件。阅读进度、标签和收藏保存在本机应用目录。"
                 + "\n\n来源归档\n扫描文件夹导入的书按原目录层级浏览；单文件导入在未分类。重新扫描原目录，可为已导入书籍补充归档。全局搜索和全部书籍包含所有藏书；详情勾选「珍藏」后可在本页按「★ 珍藏」筛选。"
@@ -1869,12 +1940,12 @@ public final class MainActivity extends Activity {
                 + "图文模式可切换「原书样式」（仅套用原书 CSS 中的排版声明，忽略颜色与脚本），阅读位置用 CFI 结构锚点记录，切换模式或样式后仍能回到相近位置。不保证固定版式。"
                 + "\nPDF：逐页查看、页码跳转和进度保存；暂不支持密码文件、搜索和批注。"
                 + "\n\n阅读与统计\n文本、漫画、听书时长分列统计，剩余时间标注为估算；同一计时段用稳定事件键去重，避免重复计时。"
-                + "\n\n备份与迁移\n「关于 → 书库备份与恢复」导出带版本清单的 .zip：逐项 SHA-256 校验，恢复前完整预检，损坏即中止不写入；相同内容的书按哈希去重，进度、标注、想法自动迁移。SAF 授权、任务记录、缓存与设备字段不导出。"
+                + "\n\n备份与迁移\n「我的 → 文件与任务 → 书库备份与恢复」导出带版本清单的 .zip：逐项 SHA-256 校验，恢复前完整预检，损坏即中止不写入；相同内容的书按哈希去重，进度、标注、想法自动迁移。SAF 授权、任务记录、缓存与设备字段不导出。"
                 + "\n\n在线发现\n可自行导入 Legado 书源、OPDS 目录及音乐 / 漫画 JSON 源；仅静态 HTTPS，不执行脚本、不支持登录或 DRM，不内置第三方内容站。网页阅读关闭脚本、文件访问及明文 HTTP。"
                 + "\n书源规则变化时可一键重新解析目录（保留进度与已缓存章节）；下载支持可验证时的断点续传，标识不符则明确重下；任务中心可重试失败项。"
                 + "\n仅在主动打开网址或书源时联网。"
                 + "\n\n无障碍\n支持系统大字体；音量键翻页仅在阅读内容聚焦时生效，控件聚焦时交给系统。"
-                + "\n\n开源许可\nMIT License。完整源代码、构建方式与已知限制见项目 README。", 15, Ui.MUTED));
+                + "\n\n开源许可\nMIT License。完整源代码、构建方式与已知限制见项目 README。", 15, Ui.color(this,UiTokens.Role.SECONDARY)));
     }
 
     /** T03：关于页三方许可入口，复用已有 AlertDialog/ScrollView，不新增依赖。 */
