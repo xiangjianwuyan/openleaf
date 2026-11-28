@@ -610,6 +610,9 @@ public final class ReaderActivity extends Activity {
         actions.add(() -> changeTextOrTheme(() -> theme = (theme + 1) % ThemePalette.PRESET_COUNT, true));
         labels.add("可视选项"); actions.add(this::visualSettings);
         labels.add("控制选项"); actions.add(this::controlSettings);
+        if (supportsPaging() && debugParagraphTools() && prefs.getBoolean("paragraphPreview", true)) {
+            labels.add("段落体检（试用）"); actions.add(this::openParagraphPreview);
+        }
         labels.add("阅读设置"); actions.add(this::settings);
         new AlertDialog.Builder(this).setTitle("更多阅读操作")
                 .setItems(labels.toArray(new String[0]), (d, which) -> {
@@ -1128,10 +1131,27 @@ public final class ReaderActivity extends Activity {
         });
     }
 
+    private String paragraphChapterSource;
+
+    private boolean debugParagraphTools() {
+        return (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    }
+
+    private void openParagraphPreview() {
+        if (!supportsPaging() || restoring || book == null) return;
+        if (paragraphChapterSource == null) {
+            Toast.makeText(this, "当前章节无法读取或超过检查上限", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        ParagraphPreview.show(this, paragraphChapterSource);
+    }
+
     private void applySearchHighlights(){
+        paragraphChapterSource = null;
         if(book==null||text==null)return;
         try {
             String original=loadChapterText(chapter);
+            if (supportsPaging() && debugParagraphTools() && original.length() <= ParagraphInspection.MAX_INPUT_UNITS) paragraphChapterSource = original; else paragraphChapterSource = null;
             // P1-4 唯一注入点：仅本地 TXT/MD 且用户主动开启时重排；
             // 关闭态由 ReflowUi 走 0.27.0 恒等路径（原文→简繁→缩进→标注→搜索→setText）。
             boolean reflowOn=paragraphReflowEnabled()&&isTextFormat();
@@ -2972,6 +2992,12 @@ public final class ReaderActivity extends Activity {
             prefetchWifiOnly = !prefetchWifiOnly;
             prefs.edit().putBoolean("prefetchWifiOnly", prefetchWifiOnly).apply();
         }, "仅 Wi-Fi 预取"));
+        if (supportsPaging() && debugParagraphTools()) {
+            panel.addView(sectionTitle("试验功能"));
+            panel.addView(settingsItemButton(() -> "显示段落体检入口：" + (prefs.getBoolean("paragraphPreview", true) ? "开" : "关"),
+                    () -> prefs.edit().putBoolean("paragraphPreview", !prefs.getBoolean("paragraphPreview", true)).apply(),
+                    "段落体检试用"));
+        }
         showReaderOptions("文本与网络", panel);
     }
 
