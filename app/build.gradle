@@ -40,8 +40,8 @@ android {
         applicationId 'org.openleaf.reader'
         minSdk 26
         targetSdk 35
-        versionCode 76
-        versionName '0.64.0'
+        versionCode 77
+        versionName '0.65.0'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
