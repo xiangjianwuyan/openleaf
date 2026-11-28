@@ -52,12 +52,18 @@ public final class MediaSourceActivity extends Activity {
     // T03 视频模式（与音频/漫画图片互斥）：复用 OpenLeafPlayer，PlayerView 只在本页承载视频。
     private OpenLeafPlayer videoPlayer;private PlayerView videoView;private TextView videoStatus;private Button videoTracks;
     private Uri currentVideo;private String videoStatusOverride;private int videoGeneration,subtitleGeneration,selectedVideoTrack;
+    // V1：统一音轨/字幕面板。videoPrepared 仅在播放器就绪时置位，面板可打开；currentSubtitleName 为已加载字幕名。
+    private boolean videoPrepared;private String currentSubtitleName;
     private enum VideoOrigin { SOURCE, LOCAL, DOWNLOADED }
     private VideoOrigin videoOrigin;
     private static final String TX_VIDEO_READY="视频已就绪 · 共 %d 条音轨";
     private static final String TX_SUBTITLE_OK="已加载字幕：%s";
     private static final String TX_SUBTITLE_FAIL="字幕文件无法读取（%s），视频仍可播放。";
     private static final String TX_TRACKS="音轨 · %s（%d 条）";
+    private static final String TX_TRACK_AND_SUBTITLE="音轨与字幕";
+    private static final String TX_TRACK_ONLY_ONE="仅 1 条音轨（%s），无需切换。";
+    private static final String TX_SUBTITLE_NONE="未加载字幕";
+    private static final String TX_SUBTITLE_AUTH_FAIL="字幕授权已失效，请重新选择字幕文件";
     private static final String TX_VIDEO_FAIL="视频无法播放（%s）。可返回来源，或换一个文件。";
     private static final String TX_NO_COMPONENT="播放组件未就绪，请检查应用安装是否完整。";
     private static final String TX_LEFT="已暂停播放（离开页面自动暂停）。";
@@ -285,8 +291,8 @@ public final class MediaSourceActivity extends Activity {
         String source=ctx!=null?"接口来源 · "+ctx.sourceName:origin==VideoOrigin.DOWNLOADED?"来源 · 已下载视频":"来源 · 本地文件";
         actions.addView(Ui.text(this,source,14,Ui.MUTED));Ui.gap(actions,10);
         LinearLayout tracks=Ui.row(this);
-        videoTracks=Ui.button(this,"音轨",this::showVideoTracks);videoTracks.setEnabled(false);tracks.addView(videoTracks,Ui.weight());
-        Button subtitles=Ui.button(this,TX_PICK_SUBTITLE,()->openSubtitlePicker(8304));subtitles.setEnabled(false);tracks.addView(subtitles,Ui.weight());
+        videoTracks=Ui.button(this,TX_TRACK_AND_SUBTITLE,this::showVideoTracksPanel,TX_TRACK_AND_SUBTITLE);
+        videoTracks.setEnabled(false);tracks.addView(videoTracks,Ui.weight());
         actions.addView(tracks);Ui.gap(actions,6);
         if(ctx!=null){
             String key=MediaDownloads.key(ctx.sourceId,ctx.itemId);
@@ -301,6 +307,7 @@ public final class MediaSourceActivity extends Activity {
             actions.addView(Ui.button(this,"选择其他本地视频",this::pickLocalVideo));
         }
         final int token=++videoGeneration;currentVideo=uri;videoStatusOverride=null;selectedVideoTrack=0;
+        videoPrepared=false;currentSubtitleName=null;
         try{
             videoView=new PlayerView(this);videoView.setUseController(true);
             surface.addView(videoView,new FrameLayout.LayoutParams(-1,-1));
@@ -308,13 +315,13 @@ public final class MediaSourceActivity extends Activity {
             videoView.setPlayer(candidate.underlying());
             candidate.setListener(new OpenLeafPlayer.Listener(){
                 public void onPrepared(){if(!currentVideoPlayer(token,candidate))return;
-                    updateVideoTracks(candidate.trackLabels());subtitles.setEnabled(true);
+                    videoPrepared=true;videoTracks.setEnabled(true);updateVideoTracks(candidate.trackLabels());
                     if(videoStatusOverride!=null){videoStatus.setText(videoStatusOverride);videoStatusOverride=null;}
                     else videoStatus.setText(String.format(Locale.ROOT,TX_VIDEO_READY,candidate.trackLabels().size()));
                     if(foreground)candidate.play();}
                 public void onCompletion(){if(currentVideoPlayer(token,candidate))videoStatus.setText("播放结束 · 可在播放器内重播");}
                 public void onError(String reason){if(currentVideoPlayer(token,candidate)){
-                    videoStatusOverride=null;videoStatus.setText(String.format(Locale.ROOT,TX_VIDEO_FAIL,reason));videoTracks.setEnabled(false);
+                    videoPrepared=false;videoStatusOverride=null;videoStatus.setText(String.format(Locale.ROOT,TX_VIDEO_FAIL,reason));videoTracks.setEnabled(false);
                 }}
                 public void onTracksChanged(){if(currentVideoPlayer(token,candidate))updateVideoTracks(candidate.trackLabels());}
             });
@@ -325,11 +332,10 @@ public final class MediaSourceActivity extends Activity {
     }
     private boolean currentVideoPlayer(int token,OpenLeafPlayer candidate){return !isDestroyed()&&token==videoGeneration&&videoPlayer==candidate;}
     private void updateVideoTracks(List<String> labels){
-        videoTracks.setEnabled(labels.size()>1);
-        if(labels.size()>1){
-            if(selectedVideoTrack>=labels.size())selectedVideoTrack=0;
-            videoTracks.setText(String.format(Locale.ROOT,TX_TRACKS,labels.get(selectedVideoTrack),labels.size()));
-        }else videoTracks.setText(labels.isEmpty()?"未检测到音轨":"音轨 · "+labels.get(0));
+        if(selectedVideoTrack>=labels.size())selectedVideoTrack=0;
+        if(labels.size()>1)videoTracks.setText(String.format(Locale.ROOT,TX_TRACK_AND_SUBTITLE+" · %s（%d 条）",labels.get(selectedVideoTrack),labels.size()));
+        else if(labels.size()==1)videoTracks.setText(TX_TRACK_AND_SUBTITLE+" · 仅 1 条音轨");
+        else videoTracks.setText(TX_TRACK_AND_SUBTITLE+" · 未检测到音轨");
     }
     private void leaveVideo(){
         boolean wasDownload=videoOrigin==VideoOrigin.DOWNLOADED;
@@ -348,23 +354,53 @@ public final class MediaSourceActivity extends Activity {
             videoPlayer.setSubtitle(subtitle,getContentResolver().getType(subtitle));
             videoStatusOverride=String.format(Locale.ROOT,TX_SUBTITLE_OK,name);
             videoPlayer.setMediaItem(currentVideo,null);
-        }catch(RuntimeException failure){videoStatus.setText(String.format(Locale.ROOT,TX_SUBTITLE_FAIL,"未知错误（"+failure.getClass().getSimpleName()+"）"));}
+            currentSubtitleName=name;
+        }catch(RuntimeException failure){
+            videoStatusOverride=null;
+            String why=failure instanceof SecurityException?TX_SUBTITLE_AUTH_FAIL:"未知错误（"+failure.getClass().getSimpleName()+"）";
+            videoStatus.setText(String.format(Locale.ROOT,TX_SUBTITLE_FAIL,why));
+        }
     }
-    @UnstableApi private void showVideoTracks(){
+    @UnstableApi private void showVideoTracksPanel(){
         OpenLeafPlayer candidate=videoPlayer;
-        if(candidate==null)return;List<String> labels=candidate.trackLabels();if(labels.size()<2)return;
-        int token=videoGeneration;
-        new AlertDialog.Builder(this).setTitle("选择音轨").setSingleChoiceItems(labels.toArray(new String[0]),selectedVideoTrack,(dialog,which)->{
-            dialog.dismiss();if(!currentVideoPlayer(token,candidate)||which<0||which>=labels.size())return;
-            selectedVideoTrack=which;candidate.selectTrack(which);updateVideoTracks(candidate.trackLabels());
-        }).setNegativeButton("取消",null).show();
+        if(candidate==null||!videoPrepared)return;
+        final int token=videoGeneration;
+        final List<String> labels=candidate.trackLabels();
+        final AlertDialog[] holder=new AlertDialog[1];
+        LinearLayout panel=Ui.column(this);Ui.pad(panel,16);
+        panel.addView(Ui.title(this,"音轨",15));Ui.gap(panel,8);
+        if(labels.isEmpty()){
+            panel.addView(Ui.text(this,"未检测到音轨",13,Ui.MUTED));
+        }else if(labels.size()==1){
+            panel.addView(Ui.text(this,String.format(Locale.ROOT,TX_TRACK_ONLY_ONE,labels.get(0)),13,Ui.MUTED));
+        }else{
+            for(int i=0;i<labels.size();i++){
+                final int index=i;
+                panel.addView(Ui.button(this,(index==selectedVideoTrack?"✓ ":"")+labels.get(index),()->{
+                    if(holder[0]!=null)holder[0].dismiss();
+                    if(!currentVideoPlayer(token,candidate)||index<0||index>=labels.size())return;
+                    selectedVideoTrack=index;candidate.selectTrack(index);updateVideoTracks(candidate.trackLabels());
+                },"选择音轨 "+labels.get(index)));
+                Ui.gap(panel,4);
+            }
+        }
+        Ui.gap(panel,12);
+        panel.addView(Ui.title(this,"字幕",15));Ui.gap(panel,8);
+        panel.addView(Ui.text(this,currentSubtitleName==null?TX_SUBTITLE_NONE:String.format(Locale.ROOT,TX_SUBTITLE_OK,currentSubtitleName),13,Ui.MUTED));
+        Ui.gap(panel,8);
+        panel.addView(Ui.button(this,TX_PICK_SUBTITLE,()->{
+            if(holder[0]!=null)holder[0].dismiss();
+            openSubtitlePicker(8304);
+        },"选择本地字幕文件"));
+        holder[0]=new AlertDialog.Builder(this).setTitle(TX_TRACK_AND_SUBTITLE).setView(panel).setNegativeButton("关闭",null).create();
+        holder[0].show();
     }
     private void releaseVideoPlayer(){
         if(videoView!=null){videoView.setPlayer(null);videoView=null;}
         if(videoPlayer!=null){videoPlayer.release();videoPlayer=null;}
     }
     private void stopVideo(){
-        videoGeneration++;currentVideo=null;videoStatusOverride=null;
+        videoGeneration++;currentVideo=null;videoStatusOverride=null;videoPrepared=false;currentSubtitleName=null;
         releaseVideoPlayer();
         videoCtx=null;videoDownload=null;downloadStatus=null;videoStatus=null;videoTracks=null;
         if(videoOrigin!=null){
